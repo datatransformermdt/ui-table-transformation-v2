@@ -264,7 +264,11 @@ with col1:
         '<div class="upload-card-file-label">File 1 of 3</div>'
         '<div class="upload-card-title">Questions &amp; schedule</div>'
         '<div class="upload-card-desc">The file that lists which questionnaires each patient was assigned and when.</div>'
-        '<div class="upload-card-example">Select the exported file that contains the questionnaire schedule. In Maela, this may be downloaded as <span>data.csv</span>.</div>'
+        '<div class="upload-card-example">'
+        '<div class="workflow-example-label">Source columns</div>'
+        '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Content Name</th><th>Input Date</th><th>Scheduled date</th></tr></table>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Example file name: <span>data.csv</span></div>'
+        '</div>'
         + status_block + '</div>',
         unsafe_allow_html=True,
     )
@@ -292,7 +296,11 @@ with col2:
         '<div class="upload-card-file-label">File 2 of 3</div>'
         '<div class="upload-card-title">Patient answers</div>'
         '<div class="upload-card-desc">The file that contains how each patient responded to each question.</div>'
-        '<div class="upload-card-example">Select the exported file that contains the patient answers. In Maela, this may also be downloaded as <span>data.csv</span>.</div>'
+        '<div class="upload-card-example">'
+        '<div class="workflow-example-label">Source columns</div>'
+        '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Content Name</th><th>Entry Date</th><th>Question</th><th>Answer Text</th><th>Answer Value</th></tr></table>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Example file name: <span>data.csv</span></div>'
+        '</div>'
         + status_block + '</div>',
         unsafe_allow_html=True,
     )
@@ -320,7 +328,11 @@ with col3:
         '<div class="upload-card-file-label">File 3 of 3 (optional)</div>'
         '<div class="upload-card-title">Patient demographics</div>'
         '<div class="upload-card-desc">Optional file with patient age and sex for each Patient ID.</div>'
-        '<div class="upload-card-example">Optional: select the exported file that contains patient age and sex. The downloaded file may be named <span>data.csv</span>.</div>'
+        '<div class="upload-card-example">'
+        '<div class="workflow-example-label">Source columns</div>'
+        '<table class="mini-table"><tr><th>Patient ID</th><th>Age</th><th>Sex</th></tr></table>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Optional file name: <span>data.csv</span></div>'
+        '</div>'
         + status_block + '</div>',
         unsafe_allow_html=True,
     )
