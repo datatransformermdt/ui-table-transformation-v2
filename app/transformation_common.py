@@ -1,3 +1,6 @@
+import re
+import unicodedata
+
 import pandas as pd
 from pathlib import Path
 
@@ -23,6 +26,26 @@ def normalize_datetime_column(df, col_name):
     if col_name in df.columns:
         df[col_name] = pd.to_datetime(df[col_name], errors="coerce")
     return df
+
+
+def normalize_question_text(text):
+    if pd.isna(text):
+        return text
+
+    text = str(text).strip()
+    text = unicodedata.normalize("NFKC", text)
+    text = re.sub(r"\s+([:;,.?!])", r"\1", text)
+    text = re.sub(r"([:;,.?!])(?=\S)", r"\1 ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"[?¿!。．\.]+$", "", text).strip()
+
+    return text
+
+
+def normalize_content_name(text):
+    if pd.isna(text):
+        return text
+    return str(text).strip()
 
 
 def require_columns(df, required_cols, df_name):
@@ -116,5 +139,11 @@ def build_merged_table(primary_file, secondary_file):
         raise ValueError(
             f"'Question' not found after merge. Available columns: {list(df.columns)}"
         )
+
+    if "Question" in df.columns:
+        df["Question_Normalized"] = df["Question"].apply(normalize_question_text)
+
+    if "Content Name" in df.columns:
+        df["Content_Name_Normalized"] = df["Content Name"].apply(normalize_content_name)
 
     return df

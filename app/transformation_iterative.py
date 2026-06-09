@@ -1,4 +1,3 @@
-import re
 import pandas as pd
 from transformation_common import build_merged_table, merge_demographics
 
@@ -13,26 +12,6 @@ ITERATIVE_CONTENT_NAME_KEYWORDS = [
 def _is_iterative_content_name(content_name):
     content_name = str(content_name or "").strip().lower()
     return any(keyword.lower() in content_name for keyword in ITERATIVE_CONTENT_NAME_KEYWORDS)
-
-
-def normalize_question_text(question):
-    """
-    Normalize question text to handle minor variations:
-    - Remove trailing punctuation (?, !, .)
-    - Strip whitespace
-    - Handle NaN/None values
-    
-    This ensures questions like:
-      'Wurde das Prä-operative Blutbild erhoben (inkl. Bluttyp & Ferritin/Transferrin)'
-      'Wurde das Prä-operative Blutbild erhoben (inkl. Bluttyp & Ferritin/Transferrin)?'
-    are recognized as the same question.
-    """
-    if pd.isna(question):
-        return pd.NA
-    question = str(question).strip()
-    # Remove trailing punctuation (?, !, .)
-    question = re.sub(r'[?!.]+$', '', question).strip()
-    return question
 
 
 def sort_question_columns(cols):
@@ -89,17 +68,14 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     pandas does not silently discard those rows.
     """
     df = build_merged_table(primary_file, secondary_file)
-    
-    # Normalize question text to handle minor variations (e.g., missing ?)
-    if "Question" in df.columns:
-        df["Question"] = df["Question"].apply(normalize_question_text)
 
     id_cols   = [col for col in ["Patient ID", "Pathway Name"] if col in df.columns]
     date_cols = [col for col in ["Scheduled date", "Entry Date"] if col in df.columns]
     
-    # Detect if there are multiple questionnaires
+    # Detect if there are multiple questionnaires.
     has_content_name = "Content Name" in df.columns
-    multiple_questionnaires = has_content_name and (df.groupby(id_cols)["Content Name"].nunique() > 1).any()
+    content_col = "Content_Name_Normalized" if "Content_Name_Normalized" in df.columns else "Content Name"
+    multiple_questionnaires = has_content_name and (df.groupby(id_cols)[content_col].nunique() > 1).any()
 
     SENTINEL_TS  = pd.Timestamp("1900-01-01")
     SENTINEL_STR = "___MISSING___"
@@ -111,14 +87,14 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     pivot_idx = id_cols + date_cols
     if multiple_questionnaires:
-        pivot_idx = pivot_idx + ["Content Name"]
+        pivot_idx = pivot_idx + [content_col]
 
     event_rows = df_pivot[pivot_idx].drop_duplicates()
     question_wide = (
-        df_pivot.dropna(subset=["Question"])
+        df_pivot.dropna(subset=["Question_Normalized"])
         .pivot_table(
             index=pivot_idx,
-            columns="Question",
+            columns="Question_Normalized",
             values="Answer_Combined",
             aggfunc="first",
         )
@@ -146,7 +122,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     # Use Content Name grouping so repeated entries within the same questionnaire
     # type get their own ordinal number, while non-iterative questionnaires
     # can still collapse into a single column later.
-    iteration_group = id_cols + (["Content Name"] if multiple_questionnaires else [])
+    iteration_group = id_cols + ([content_col] if multiple_questionnaires else [])
     wide_per_event["Iteration"] = (
         wide_per_event.groupby(iteration_group).cumcount() + 1
     )
@@ -154,7 +130,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     # ── Step 4: melt back to long format ──
     melt_id_vars = id_cols + ["Iteration"]
     if multiple_questionnaires:
-        melt_id_vars = melt_id_vars + ["Content Name"]
+        melt_id_vars = melt_id_vars + [content_col]
     
     non_value_cols = set(melt_id_vars + date_cols)
     value_cols = [col for col in wide_per_event.columns if col not in non_value_cols]
@@ -175,10 +151,10 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     question = melted["Question"].astype(str).str.strip()
     if has_content_name and multiple_questionnaires:
         print(f"[DEBUG] Building Question_Iteration using Content Name, iterative content names will keep iteration")
-        content_name = melted["Content Name"].astype(str).str.strip()
+        content_name = melted[content_col].fillna("").astype(str).str.strip()
         melted["Question_Iteration"] = question + "_" + content_name
 
-        iterative_mask = melted["Content Name"].apply(_is_iterative_content_name)
+        iterative_mask = melted[content_col].apply(_is_iterative_content_name)
         if iterative_mask.any():
             melted.loc[iterative_mask, "Question_Iteration"] = (
                 melted.loc[iterative_mask, "Question_Iteration"]
@@ -203,6 +179,9 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         values="Value",
         aggfunc="first",
     ).reset_index()
+
+    base = df[id_cols].drop_duplicates()
+    final = base.merge(final, on=id_cols, how="left")
     final.columns.name = None
 
     print(f"[DEBUG] After pivot: shape={final.shape}, 'Content Name' in columns={'Content Name' in final.columns}")

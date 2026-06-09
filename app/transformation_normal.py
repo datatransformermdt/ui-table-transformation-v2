@@ -31,13 +31,16 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, o
         else:
             df_pivot[col] = df_pivot[col].fillna(SENTINEL_STR)
 
+    pivot_question_col = "Question_Normalized" if "Question_Normalized" in df_pivot.columns else "Question"
     final = df_pivot.pivot_table(
         index=id_cols + date_cols,
-        columns="Question",
+        columns=pivot_question_col,
         values="Answer_Combined",
         aggfunc="first",
     ).reset_index()
 
+    base = df_pivot[id_cols + date_cols].drop_duplicates()
+    final = base.merge(final, on=id_cols + date_cols, how="left")
     final.columns.name = None
 
     # Restore sentinels back to NaN/NaT
