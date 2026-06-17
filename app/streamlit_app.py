@@ -326,18 +326,18 @@ with col3:
     st.markdown(
         '<div class="' + card_cls + '">'
         '<div class="upload-card-file-label">File 3 of 3 (optional)</div>'
-        '<div class="upload-card-title">Patient demographics</div>'
-        '<div class="upload-card-desc">Optional file with patient age and sex for each Patient ID.</div>'
+        '<div class="upload-card-title">Patient metadata / enrichment file</div>'
+        '<div class="upload-card-desc">Optional file with extra patient or pathway-level columns. It merges by Patient ID and Pathway Name when available.</div>'
         '<div class="upload-card-example">'
         '<div class="workflow-example-label">Source columns</div>'
-        '<table class="mini-table"><tr><th>Patient ID</th><th>Age</th><th>Sex</th></tr></table>'
-        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Optional file name: <span>data.csv</span></div>'
+        '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Age</th><th>Sex</th><th>Other fields</th></tr></table>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Optional file name: <span>metadata.csv</span></div>'
         '</div>'
         + status_block + '</div>',
         unsafe_allow_html=True,
     )
     st.file_uploader(
-        "Patient demographics file",
+        "Patient metadata / enrichment file",
         type=["csv", "xlsx"],
         key="demographics_file",
         label_visibility="collapsed",
@@ -345,7 +345,7 @@ with col3:
 
 st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
-# ── STEP 2 — Questionnaire type ────────────────────────────────────────────────
+# ── STEP 2 — Questionnaire type ───────────────────────────────────────────────
 step2_num_cls = "" if required_done else "pending"
 st.markdown(
     f"""

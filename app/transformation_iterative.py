@@ -1,5 +1,5 @@
 import pandas as pd
-from transformation_common import build_merged_table, merge_demographics
+from transformation_common import build_merged_table, merge_demographics, prepare_endpoint_file
 
 ITERATIVE_CONTENT_NAME_KEYWORDS = [
     "Allgemeine Gesundheit",  # Globale Gesundheitsumfrage / PROMIS-10
@@ -51,7 +51,7 @@ def _restore_sentinel(series, sentinel_ts, sentinel_str):
         return series.replace(sentinel_str, pd.NA)
 
 
-def process_iterative_files(primary_file, secondary_file, demographics_file=None, output_file=None):
+def process_iterative_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None):
     """
     Iterative questionnaire workflow.
 
@@ -201,6 +201,15 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     # Note: columns are already ordered above; do not drop sparse iteration columns.
 
     final = merge_demographics(final, demographics_file)
+    if endpoint_file is not None:
+        endpoints = prepare_endpoint_file(endpoint_file)
+        final = final.merge(
+            endpoints,
+            on=["Patient ID", "Pathway Name"],
+            how="left",
+            suffixes=("", "_endpoint"),
+        )
+
     if any(col in final.columns for col in ["Age", "Sex", "Gender"]):
         demo_cols = [col for col in ["Age", "Sex", "Gender"] if col in final.columns]
         base_cols = [col for col in ["Patient ID"] if col in final.columns]

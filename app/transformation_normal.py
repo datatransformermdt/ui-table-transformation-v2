@@ -1,8 +1,8 @@
 import pandas as pd
-from transformation_common import build_merged_table, merge_demographics
+from transformation_common import build_merged_table, merge_demographics, prepare_endpoint_file
 
 
-def process_normal_files(primary_file, secondary_file, demographics_file=None, output_file=None):
+def process_normal_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None):
     """
     Normal (non-iterative) questionnaire workflow.
 
@@ -51,6 +51,15 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, o
             final[col] = final[col].replace(SENTINEL_STR, pd.NA)
 
     final = merge_demographics(final, demographics_file)
+    if endpoint_file is not None:
+        endpoints = prepare_endpoint_file(endpoint_file)
+        final = final.merge(
+            endpoints,
+            on=["Patient ID", "Pathway Name"],
+            how="left",
+            suffixes=("", "_endpoint"),
+        )
+
     if any(col in final.columns for col in ["Age", "Sex", "Gender"]):
         demo_cols = [col for col in ["Age", "Sex", "Gender"] if col in final.columns]
         base_cols = [col for col in ["Patient ID"] if col in final.columns]
