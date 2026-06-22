@@ -133,6 +133,51 @@ def merge_demographics(df, demographics_file):
     return df.merge(demo, on=merge_keys, how="left")
 
 
+def _assign_answer_entry_dates_by_tolerance(left, right, tolerance=pd.Timedelta(seconds=2)):
+    """Assign each answer row the nearest scheduled Entry Date within tolerance."""
+    core_keys = ["Patient ID", "Pathway Name", "Content Name"]
+    required_cols = core_keys + ["Entry Date"]
+
+    if any(col not in left.columns for col in required_cols):
+        raise ValueError(f"Left file is missing required columns for tolerance matching: {required_cols}")
+    if any(col not in right.columns for col in required_cols):
+        raise ValueError(f"Right file is missing required columns for tolerance matching: {required_cols}")
+
+    left_events = (
+        left[required_cols]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+    right = right.reset_index().rename(columns={"index": "_right_idx"})
+    candidates = right.merge(
+        left_events.rename(columns={"Entry Date": "Entry Date_Scheduled"}),
+        on=core_keys,
+        how="left",
+    )
+
+    candidates["Distance"] = (candidates["Entry Date"] - candidates["Entry Date_Scheduled"]).abs()
+    candidates = candidates[candidates["Distance"] <= tolerance].copy()
+
+    if not candidates.empty:
+        candidates = (
+            candidates.sort_values(["_right_idx", "Distance"])
+            .groupby("_right_idx", as_index=False)
+            .first()
+        )
+        right = right.merge(
+            candidates[["_right_idx", "Entry Date_Scheduled"]],
+            on="_right_idx",
+            how="left",
+        )
+        right["Entry Date"] = right["Entry Date_Scheduled"].fillna(right["Entry Date"])
+        right = right.drop(columns=["Entry Date_Scheduled", "_right_idx"])
+    else:
+        right = right.drop(columns=["_right_idx"])
+
+    return right
+
+
 def build_merged_table(primary_file, secondary_file):
     """
     Reads, cleans, validates and merges the two input files.
@@ -155,6 +200,11 @@ def build_merged_table(primary_file, secondary_file):
 
     require_columns(left, required_left, "Primary input file")
     require_columns(right, required_right, "Secondary input file")
+
+    # Assign answers to the nearest scheduled Entry Date when timestamps differ
+    # by a small amount (e.g. 1-2 seconds), but keep the schedule rows as the
+    # authoritative event definition.
+    right = _assign_answer_entry_dates_by_tolerance(left, right)
 
     merge_keys = ["Patient ID", "Pathway Name", "Content Name", "Entry Date"]
     merged = pd.merge(left, right, on=merge_keys, how="left")

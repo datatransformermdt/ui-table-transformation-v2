@@ -5,6 +5,7 @@ ITERATIVE_CONTENT_NAME_KEYWORDS = [
     "Allgemeine Gesundheit",  # Globale Gesundheitsumfrage / PROMIS-10
     "Schmerztagebuch",         # Schmerztagebuch variants
     "Tagesbericht zuhause",   # Tagesbericht zuhause
+    "Wöchentliches Bewegungstagebuch",  # Weekly movement diary
     "BMI",                    # BMI-Daten
 ]
 

@@ -1,0 +1,65 @@
+# Ulm ERP Transformation Configuration
+# Medtronic Ulm Hospital Enhanced Recovery Program
+
+name: Ulm ERP
+description: "Medtronic Ulm Hospital Enhanced Recovery Program data transformation"
+
+# Column mappings for each file role
+column_mappings:
+  demographics:
+    patient_id: "Patient ID"
+    age: "Patient Age"
+    sex: "Patient Gender"
+  
+  scheduled_content:
+    patient_id: "Patient ID"
+    pathway_name: "Pathway Name"
+    content_name: "Content Name"
+    scheduled_date: "Scheduled date"
+    entry_date: "Entry Date"
+    content_status: "Content Status"
+  
+  answers:
+    patient_id: "Patient ID"
+    pathway_name: "Pathway Name"
+    content_name: "Content Name"
+    question: "Question"
+    answer: "Answer Text"
+    numeric_answer: "Answer Value"
+    entry_date: "Entry Date"
+    scheduled_date: "Scheduled date"
+
+# Content names that are true iterative questionnaires
+# These will be preserved as _1, _2, _3 in the output
+iterative_contents:
+  - "BMI"
+  - "Allgemeine Gesundheit"
+  - "Schmerztagebuch"
+  - "Tagesbericht zuhause"
+
+# Policy for handling repeated non-iterative answers
+non_iterative_policy:
+  policy: "latest_non_blank"  # Options: latest_non_blank, first_non_blank, flag_only, preserve_all
+  flag_if_different: true
+
+# Clinical endpoints to derive/include
+enabled_endpoints:
+  - "length_of_stay_days"
+  - "discharge_destination"
+  - "postoperative_mortality"
+  - "pathway_adherence_pct"
+  - "urinary_catheter_removed_by_pod1"
+  - "mobility_minutes_out_of_bed_pod1"
+
+# Column grouping order for output
+column_groups_order:
+  - "Identifiers"
+  - "Demographics"
+  - "Pathway Information"
+  - "Clinical Endpoints"
+  - "Adherence Markers"
+  - "Pre-operative Variables"
+  - "Post-operative Variables"
+  - "Questionnaires"
+  - "Follow-up Outcomes"
+  - "Other"

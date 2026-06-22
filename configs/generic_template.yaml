@@ -1,0 +1,65 @@
+# Generic Transformation Configuration
+# Template for new hospitals/projects
+
+name: Generic Template
+description: "Generic configuration template for new hospitals/datasets"
+
+# Column mappings for each file role
+# Adjust these column names to match your input files
+column_mappings:
+  demographics:
+    patient_id: "patient_id"  # ADJUST: your patient ID column name
+    age: "age"
+    sex: "sex"
+  
+  scheduled_content:
+    patient_id: "patient_id"
+    pathway_name: "pathway_name"
+    content_name: "content_name"
+    scheduled_date: "scheduled_date"
+    entry_date: "entry_date"
+    content_status: "content_status"
+  
+  answers:
+    patient_id: "patient_id"
+    pathway_name: "pathway_name"
+    content_name: "content_name"
+    question: "question"
+    answer: "answer"
+    text_answer: "text_answer"
+    numeric_answer: "numeric_answer"
+    entry_date: "entry_date"
+    scheduled_date: "scheduled_date"
+
+# Content names that are true iterative questionnaires
+# These will be preserved as _1, _2, _3 in the output
+# ADJUST: add your iterative content names here
+iterative_contents:
+  # - "Content Name 1"
+  # - "Content Name 2"
+
+# Policy for handling repeated non-iterative answers
+non_iterative_policy:
+  policy: "latest_non_blank"  # Options: latest_non_blank, first_non_blank, flag_only, preserve_all
+  flag_if_different: true
+
+# Clinical endpoints to derive/include
+# ADJUST: include endpoints that are relevant to your use case
+enabled_endpoints:
+  - "length_of_stay_days"
+  - "discharge_destination"
+  - "postoperative_mortality"
+  - "pathway_adherence_pct"
+
+# Column grouping order for output
+column_groups_order:
+  - "Identifiers"
+  - "Demographics"
+  - "Pathway Information"
+  - "Clinical Endpoints"
+  - "Adherence Markers"
+  - "Pre-operative Variables"
+  - "Post-operative Variables"
+  - "Questionnaires"
+  - "Follow-up Outcomes"
+  - "Other"

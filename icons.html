@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinical & Database Integration Icon Assets</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --primary: #0025D2;
+            --primary-dark: #001140;
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --green: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            padding: 60px 40px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 50px;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+
+        .brand-pill {
+            background-color: rgba(0, 37, 210, 0.2);
+            border: 1px solid var(--primary);
+            color: #93c5fd;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 16px;
+            display: inline-block;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 42px;
+            color: #ffffff;
+            font-weight: 700;
+        }
+
+        p.desc {
+            color: var(--text-muted);
+            font-size: 16px;
+            margin-top: 8px;
+            max-width: 700px;
+            line-height: 1.5;
+        }
+
+        .medtronic-logo {
+            font-family: 'Outfit', sans-serif;
+            font-size: 24px;
+            letter-spacing: -0.03em;
+            color: #ffffff;
+        }
+        .medtronic-logo span {
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .section-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 22px;
+            color: #ffffff;
+            margin: 40px 0 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .section-title i {
+            color: var(--primary);
+        }
+
+        .icon-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 24px;
+        }
+
+        .icon-card {
+            background-color: var(--card-bg);
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            transition: all 0.2s ease;
+        }
+
+        .icon-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px -10px rgba(0, 37, 210, 0.3);
+        }
+
+        .icon-preview-wrapper {
+            width: 100%;
+            height: 120px;
+            background-color: #0f172a;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+            border: 1px solid #1e293b;
+        }
+
+        /* Responsive custom SVG scaling */
+        .icon-preview-wrapper svg {
+            width: 56px;
+            height: 56px;
+            stroke-width: 2;
+        }
+
+        /* Clinical/EHR styles */
+        .color-blue svg { stroke: #3b82f6; fill: rgba(59, 130, 246, 0.05); }
+        .color-green svg { stroke: #10b981; fill: rgba(16, 185, 129, 0.05); }
+        .color-yellow svg { stroke: #f59e0b; fill: rgba(245, 158, 11, 0.05); }
+        .color-purple svg { stroke: #a855f7; fill: rgba(168, 85, 247, 0.05); }
+        .color-brand svg { stroke: #2563eb; fill: rgba(37, 99, 235, 0.05); }
+
+        .icon-info {
+            text-align: center;
+            width: 100%;
+            margin-bottom: 16px;
+        }
+
+        .icon-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 4px;
+        }
+
+        .icon-use {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .btn-copy {
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 1px solid #475569;
+            color: #ffffff;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.15s ease;
+        }
+
+        .btn-copy:hover {
+            background-color: var(--primary);
+            border-color: var(--primary);
+        }
+
+        .btn-copy:active {
+            transform: scale(0.98);
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background-color: var(--green);
+            color: #ffffff;
+            padding: 14px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <header>
+            <div>
+                <span class="brand-pill">Slide Deck Elements</span>
+                <h1>Clinical Vector Icon Library</h1>
+                <p class="desc">A collection of custom inline-SVG vector assets optimized for high-end medical research presentations. Copy any clean SVG component code directly to your clipboard.</p>
+            </div>
+            <div class="medtronic-logo">
+                <span>Med</span>tronic
+            </div>
+        </header>
+
+        <!-- CATEGORY 1: DATA SOURCES -->
+        <div class="section-title">
+            <i class="fa-solid fa-cloud-arrow-down"></i>
+            <h2>Clinical Input Streams</h2>
+        </div>
+
+        <div class="icon-grid">
+            <!-- EHR Feed -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-blue" id="preview-ehr">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                        <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                        <path d="M12 11h4M12 15h4M8 11h.01M8 15h.01"></path>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Electronic Health Record (EHR)</div>
+                    <div class="icon-use">Primary source clinical data streams</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-ehr')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+
+            <!-- Lab Results -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-green" id="preview-lab">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 3h12M18 3v3c0 1.5-1 3.5-3 4.5l-3 1.5M6 3v3c0 1.5 1 3.5 3 4.5l3 1.5"></path>
+                        <path d="M12 12v9M8 21h8M9 16h6"></path>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Lab Results (Flask)</div>
+                    <div class="icon-use">Laboratory, bloodwork & panels</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-lab')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+
+            <!-- Medical Device -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-yellow" id="preview-pulse">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Device Telemetry (Pulse)</div>
+                    <div class="icon-use">Patient monitors & smart device feeds</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-pulse')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+        </div>
+
+        <!-- CATEGORY 2: INTEGRATION & PROCESSING -->
+        <div class="section-title">
+            <i class="fa-solid fa-gears"></i>
+            <h2>Aggregation & Databasing</h2>
+        </div>
+
+        <div class="icon-grid">
+            <!-- Central Database -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-brand" id="preview-database">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                        <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Unified Database</div>
+                    <div class="icon-use">Centralized clinical source of truth</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-database')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+
+            <!-- Merging/Ingestion -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-purple" id="preview-merge">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2v20M5 5l7 7M19 5l-7 7M12 12L5 19M12 12l7 7"></path>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Consolidation Gateway</div>
+                    <div class="icon-use">Aggregating fragmented streams into one</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-merge')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+
+            <!-- Secure Cloud -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-blue" id="preview-cloud">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                        <path d="M12 15l-3-3m3 3l3-3m-3 3v-6"></path>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Secure Cloud Repository</div>
+                    <div class="icon-use">Encrypted processing & compliance tier</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-cloud')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+        </div>
+
+        <!-- CATEGORY 3: RESEARCH & METRICS -->
+        <div class="section-title">
+            <i class="fa-solid fa-chart-line"></i>
+            <h2>Research & Analytical Outputs</h2>
+        </div>
+
+        <div class="icon-grid">
+            <!-- DNA / Breakthrough -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-green" id="preview-dna">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4.5 10.5C4.5 5.5 8.5 2 12 2s7.5 3.5 7.5 8.5S15.5 22 12 22s-7.5-6.5-7.5-11.5z"></path>
+                        <path d="M6 12h12M8 16h8M8 8h8M10 5h4M10 19h4"></path>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">DNA Helix (Research)</div>
+                    <div class="icon-use">Clinical discoveries & research ready</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-dna')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+
+            <!-- Instant Analytics -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-yellow" id="preview-analytics">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="14"></line>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Analytics Engine</div>
+                    <div class="icon-use">Real-time charts, metrics & pipelines</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-analytics')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+
+            <!-- Target / Clinical Milestones -->
+            <div class="icon-card">
+                <div class="icon-preview-wrapper color-purple" id="preview-target">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <circle cx="12" cy="12" r="6"></circle>
+                        <circle cx="12" cy="12" r="2"></circle>
+                    </svg>
+                </div>
+                <div class="icon-info">
+                    <div class="icon-title">Target Outcomes</div>
+                    <div class="icon-use">Milestones and objective key results</div>
+                </div>
+                <button class="btn-copy" onclick="copySVG('preview-target')">
+                    <i class="fa-regular fa-copy"></i> Copy SVG Code
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification system for visual comfort -->
+    <div class="toast" id="copy-toast">
+        <i class="fa-solid fa-circle-check"></i> SVG Vector copied successfully!
+    </div>
+
+    <script>
+        function copySVG(containerId) {
+            const container = document.getElementById(containerId);
+            const svgContent = container.innerHTML.trim();
+            
+            navigator.clipboard.writeText(svgContent).then(() => {
+                showToast();
+            }).catch(err => {
+                console.error('Failed to copy SVG: ', err);
+            });
+        }
+
+        function showToast() {
+            const toast = document.getElementById('copy-toast');
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2500);
+        }
+    </script>
+</body>
+</html>
+```eof
+
+### What was created:
+* **8 Customized Vector SVG Icons:** Includes dedicated clinical diagrams (`EHR Feeds`, `Laboratory Flasks`, `Real-time Waveforms`, `Centralized DB Cylinders`, and `Data Pipelines`) styled with glowing color-coding rules matching the Medtronic slide template.
+* **Click-to-Copy Utility:** Simply open `clinical_icon_assets.html` in your web browser and click any icon's button. It instantly grabs the clean, raw `<svg>` code ready to drop straight into your slide markdown or HTML layout templates. 
+
+Let me know if there are any specific additional clinical vectors you would like me to build and add to this library!

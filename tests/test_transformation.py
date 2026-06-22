@@ -107,6 +107,50 @@ class TransformationIterativeTest(unittest.TestCase):
             self.assertEqual(result.shape[0], 2)
             self.assertIn('B', result['Pathway Name'].values)
 
+    def test_timestamp_tolerance_assigns_nearby_answers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Allgemeine Gesundheit', 'Scheduled date': pd.NA, 'Input date': '2025-01-01 10:00:00'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Allgemeine Gesundheit', 'Entry Date': '2025-01-01 10:00:01', 'Question': 'Q1', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertIn('Q1_1', result.columns)
+            self.assertEqual(result.loc[0, 'Q1_1'], 'A')
+
+    def test_weekly_movement_diary_is_iterative(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Wöchentliches Bewegungstagebuch', 'Scheduled date': pd.NA, 'Input date': '2025-01-01'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Wöchentliches Bewegungstagebuch', 'Scheduled date': pd.NA, 'Input date': '2025-01-08'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Wöchentliches Bewegungstagebuch', 'Entry Date': '2025-01-01', 'Question': 'Q1', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Wöchentliches Bewegungstagebuch', 'Entry Date': '2025-01-08', 'Question': 'Q1', 'Answer Text': pd.NA, 'Answer Value': 'B'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertIn('Q1_1', result.columns)
+            self.assertIn('Q1_2', result.columns)
+            self.assertEqual(result.loc[0, 'Q1_1'], 'A')
+            self.assertEqual(result.loc[0, 'Q1_2'], 'B')
+
     def test_normal_question_variation_is_normalized(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             content_path = os.path.join(tmpdir, 'content.csv')

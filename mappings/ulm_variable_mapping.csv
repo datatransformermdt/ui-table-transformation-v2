@@ -1,0 +1,6 @@
+source_table,content_name,raw_question_contains,standard_question_text,standard_variable_name,description,endpoint_group,is_iterative
+answers,BMI,Gewicht,Gewicht,bmi_weight_kg,Patient weight in kilograms,BMI,true
+answers,BMI,Größe,Größe (in Zentimetern),bmi_height_cm,Patient height in centimeters,BMI,true
+answers,BMI,BMI,BMI,bmi_value,Body mass index,BMI,true
+answers,ERP Post-OP,Katheter am 1. postoperativen Tag,Harnableitung Katheter am 1. postoperativen Tag oder früher entfernt,urinary_catheter_removed_by_pod1,Urinary catheter removed on or before POD1,ERP Post-OP,false
+answers,Tagesziele 1. Post-OP Tag,außerhalb des Bettes,Mobilisation minutes outside bed POD1,mobility_minutes_out_of_bed_pod1,Minutes spent outside bed on postoperative day 1,Mobility,false
