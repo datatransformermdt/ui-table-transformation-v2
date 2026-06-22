@@ -1,5 +1,5 @@
 import pandas as pd
-from transformation_common import build_merged_table, merge_demographics, prepare_endpoint_file
+from transformation_common import build_merged_table, merge_demographics, prepare_endpoint_file, reorder_transformed_columns
 
 
 def process_normal_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None):
@@ -60,12 +60,7 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
             suffixes=("", "_endpoint"),
         )
 
-    if any(col in final.columns for col in ["Age", "Sex", "Gender"]):
-        demo_cols = [col for col in ["Age", "Sex", "Gender"] if col in final.columns]
-        base_cols = [col for col in ["Patient ID"] if col in final.columns]
-        remaining_id_cols = [col for col in ["Pathway Name", "Content Name"] if col in final.columns]
-        other_cols = [col for col in final.columns if col not in base_cols + demo_cols + remaining_id_cols]
-        final = final[base_cols + demo_cols + remaining_id_cols + other_cols]
+    final = reorder_transformed_columns(final, demographics_file)
 
     if output_file:
         final.to_csv(output_file, index=False, encoding="utf-8-sig")

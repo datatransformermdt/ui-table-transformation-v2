@@ -1,3 +1,4 @@
+import io
 import re
 import unicodedata
 
@@ -5,14 +6,53 @@ import pandas as pd
 from pathlib import Path
 
 
+def _find_excel_header_row(df):
+    possible_headers = {
+        "Patient ID", "Pathway Name", "Content Name", "Entry Date",
+        "Scheduled date", "Input date", "Question", "Answer Text",
+        "Answer Value",
+    }
+
+    max_rows = min(len(df), 8)
+    for row_idx in range(max_rows):
+        row = df.iloc[row_idx].astype(str).fillna("").str.strip()
+        valid_cells = row[row != ""]
+        if len(valid_cells) < 2:
+            continue
+
+        if valid_cells.str.contains(r"^Unnamed", regex=True).any():
+            continue
+
+        header_matches = sum(1 for value in valid_cells if value in possible_headers)
+        if header_matches >= 2 or len(valid_cells) >= max(2, len(row) * 0.5):
+            return row_idx
+
+    return 0
+
+
 def read_input_file(file):
     file_name = file if isinstance(file, str) else getattr(file, "name", "")
     suffix = Path(file_name).suffix.lower()
 
     if suffix == ".csv":
+        if not isinstance(file, str) and hasattr(file, "seek"):
+            file.seek(0)
         return pd.read_csv(file)
     elif suffix in [".xlsx", ".xls"]:
-        return pd.read_excel(file, header=2)
+        engine = "openpyxl" if suffix == ".xlsx" else "xlrd"
+        if isinstance(file, str):
+            preview_df = pd.read_excel(file, header=None, engine=engine)
+            header_row = _find_excel_header_row(preview_df)
+            return pd.read_excel(file, header=header_row, engine=engine)
+        else:
+            if hasattr(file, "seek"):
+                file.seek(0)
+            file_bytes = file.read()
+            excel_source = io.BytesIO(file_bytes)
+            preview_df = pd.read_excel(excel_source, header=None, engine=engine)
+            header_row = _find_excel_header_row(preview_df)
+            excel_source.seek(0)
+            return pd.read_excel(excel_source, header=header_row, engine=engine)
     else:
         raise ValueError(f"Unsupported file format: {suffix}")
 
@@ -26,6 +66,13 @@ def normalize_datetime_column(df, col_name):
     if col_name in df.columns:
         df[col_name] = pd.to_datetime(df[col_name], errors="coerce")
     return df
+
+
+def _strip_accents(text):
+    if pd.isna(text):
+        return text
+    normalized = unicodedata.normalize("NFKD", str(text))
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
 
 def normalize_question_text(text):
@@ -48,6 +95,95 @@ def normalize_content_name(text):
     return str(text).strip()
 
 
+def _strip_accents(text):
+    if pd.isna(text):
+        return text
+    normalized = unicodedata.normalize("NFKD", str(text))
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _find_column(df, candidate_names):
+    for name in candidate_names:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _combine_answer_columns(df):
+    df = df.copy()
+    text_cols = [col for col in ["Answer Text", "Text Answer", "Answer"] if col in df.columns]
+    value_cols = [col for col in ["Answer Value", "Value", "Numeric Answer"] if col in df.columns]
+
+    if not text_cols and not value_cols:
+        raise ValueError(
+            "Answers file must contain at least one answer column: Answer Text, Text Answer, Answer, Answer Value, Value, or Numeric Answer"
+        )
+
+    if text_cols:
+        df[text_cols] = df[text_cols].replace({"": pd.NA})
+    if value_cols:
+        df[value_cols] = df[value_cols].replace({"": pd.NA})
+
+    df["Answer_Combined"] = pd.NA
+    for col in text_cols:
+        df["Answer_Combined"] = df["Answer_Combined"].fillna(df[col])
+
+    for col in value_cols:
+        df["Answer_Combined"] = df["Answer_Combined"].fillna(df[col])
+
+    if "Answer" in df.columns and "Answer" not in text_cols:
+        df["Answer_Combined"] = df["Answer_Combined"].fillna(df["Answer"])
+
+    return df
+
+
+def _is_iterative_content_name(content_name):
+    if pd.isna(content_name):
+        return False
+
+    keyword_list = [
+        "Allgemeine Gesundheit",
+        "Schmerztagebuch",
+        "Tagesbericht zuhause",
+        "BMI",
+        "Bewegungstagebuch",
+        "Wöchentliches Bewegungstagebuch",
+        "Woechentliches Bewegungstagebuch",
+    ]
+    content_normalized = _strip_accents(content_name).lower()
+    return any(_strip_accents(keyword).lower() in content_normalized for keyword in keyword_list)
+
+
+def build_content_base(content_file):
+    content = clean_columns(read_input_file(content_file))
+    require_columns(content, ["Patient ID", "Pathway Name"], "Content file")
+    return content[["Patient ID", "Pathway Name"]].drop_duplicates()
+
+
+def build_answer_table(content_file, answers_file):
+    base = build_content_base(content_file)
+    answers = clean_columns(read_input_file(answers_file))
+
+    if "Input date" in answers.columns:
+        answers = answers.rename(columns={"Input date": "Entry Date"})
+
+    normalize_datetime_column(answers, "Entry Date")
+
+    require_columns(answers, ["Patient ID", "Pathway Name", "Content Name", "Question"], "Answers file")
+
+    answers = answers.merge(
+        base,
+        on=["Patient ID", "Pathway Name"],
+        how="inner"
+    )
+
+    answers = _combine_answer_columns(answers)
+    answers["Question_Normalized"] = answers["Question"].apply(normalize_question_text)
+    answers["Content_Name_Normalized"] = answers["Content Name"].apply(normalize_content_name)
+
+    return answers
+
+
 def require_columns(df, required_cols, df_name):
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
@@ -57,6 +193,12 @@ def require_columns(df, required_cols, df_name):
 def prepare_endpoint_file(endpoint_file):
     endpoints = clean_columns(read_input_file(endpoint_file))
     require_columns(endpoints, ["Patient ID", "Pathway Name"], "endpoint file")
+
+    duplicate_count = endpoints.duplicated(subset=["Patient ID", "Pathway Name"]).sum()
+    if duplicate_count > 0:
+        raise ValueError(
+            f"Endpoint file contains {duplicate_count} duplicate Patient ID + Pathway Name rows"
+        )
 
     if "Length of hospital stay" in endpoints.columns:
         endpoints = endpoints.rename(
@@ -111,24 +253,96 @@ def prepare_endpoint_file(endpoint_file):
 
 def read_demographics_file(file):
     demo = clean_columns(read_input_file(file))
-    require_columns(demo, ["Patient ID"], "Patient metadata file")
+    require_columns(demo, ["Patient ID"], "Enrichment file")
 
     merge_keys = ["Patient ID"]
     if "Pathway Name" in demo.columns:
         merge_keys.append("Pathway Name")
 
-    demo = demo.drop_duplicates(subset=merge_keys)
+    duplicate_count = demo.duplicated(subset=merge_keys).sum()
+    if duplicate_count > 0:
+        raise ValueError(
+            f"Enrichment file contains {duplicate_count} duplicate rows for keys {merge_keys}"
+        )
+
     return demo
 
 
+def reorder_transformed_columns(final, demographics_file=None):
+    base_cols = [col for col in ["Patient ID", "Pathway Name"] if col in final.columns]
+    demo_cols = []
+    if demographics_file is not None:
+        if isinstance(demographics_file, pd.DataFrame):
+            demo = clean_columns(demographics_file.copy())
+        else:
+            demo = read_demographics_file(demographics_file)
+        demo_cols = [col for col in demo.columns if col not in base_cols]
+        demo_cols = [col for col in demo_cols if col in final.columns]
+
+    endpoint_cols = [col for col in final.columns if isinstance(col, str) and col.startswith("Endpoint_")]
+    ordered_cols = base_cols + demo_cols + endpoint_cols + [col for col in final.columns if col not in base_cols + demo_cols + endpoint_cols]
+    return final[ordered_cols]
+
+
+def _first_non_null(series):
+    for value in series:
+        if pd.notna(value):
+            return value
+    return pd.NA
+
+
+def _collapse_duplicate_rows(df, merge_keys, df_name):
+    if not df.duplicated(subset=merge_keys).any():
+        return df
+
+    duplicates = df[df.duplicated(subset=merge_keys, keep=False)]
+    conflicts = []
+    non_key_cols = [col for col in df.columns if col not in merge_keys]
+    grouped = duplicates.groupby(merge_keys, dropna=False)
+
+    for key_values, group in grouped:
+        for col in non_key_cols:
+            non_null_values = group[col].dropna().astype(str).unique()
+            if len(non_null_values) > 1:
+                conflicts.append((key_values, col, non_null_values.tolist()))
+
+    if conflicts:
+        raise ValueError(
+            f"{df_name} contains conflicting duplicate rows for keys {merge_keys}: "
+            f"{len(conflicts)} conflict(s) found."
+        )
+
+    return df.groupby(merge_keys, as_index=False).agg(_first_non_null)
+
+
 def merge_demographics(df, demographics_file):
+    """Merge demographics/enrichment information into the main dataframe.
+
+    Accepts either a path/file-like object or a pre-loaded pandas DataFrame.
+    Merges on Patient ID and Pathway Name when both are available.
+    """
     if demographics_file is None:
         return df
-    demo = read_demographics_file(demographics_file)
+
+    if isinstance(demographics_file, pd.DataFrame):
+        demo = clean_columns(demographics_file.copy())
+    else:
+        demo = read_demographics_file(demographics_file)
+
+    require_columns(df, ["Patient ID"], "Final output")
+    require_columns(demo, ["Patient ID"], "Enrichment file")
 
     merge_keys = ["Patient ID"]
     if "Pathway Name" in demo.columns and "Pathway Name" in df.columns:
         merge_keys.append("Pathway Name")
+
+    demo = _collapse_duplicate_rows(demo, merge_keys, "Enrichment data")
+
+    overlap = set(demo.columns).intersection(set(df.columns)) - set(merge_keys)
+    if overlap:
+        raise ValueError(
+            f"Enrichment file contains column(s) already present in output: {sorted(overlap)}"
+        )
 
     return df.merge(demo, on=merge_keys, how="left")
 
@@ -191,6 +405,8 @@ def build_merged_table(primary_file, secondary_file):
 
     if "Input date" in left.columns:
         left = left.rename(columns={"Input date": "Entry Date"})
+    if "Input date" in right.columns:
+        right = right.rename(columns={"Input date": "Entry Date"})
 
     normalize_datetime_column(left, "Entry Date")
     normalize_datetime_column(right, "Entry Date")
@@ -201,31 +417,27 @@ def build_merged_table(primary_file, secondary_file):
     require_columns(left, required_left, "Primary input file")
     require_columns(right, required_right, "Secondary input file")
 
-    # Assign answers to the nearest scheduled Entry Date when timestamps differ
-    # by a small amount (e.g. 1-2 seconds), but keep the schedule rows as the
-    # authoritative event definition.
-    right = _assign_answer_entry_dates_by_tolerance(left, right)
+    right = _combine_answer_columns(right)
+    right["Question_Normalized"] = right["Question"].apply(normalize_question_text)
+    right["Content_Name_Normalized"] = right["Content Name"].apply(normalize_content_name)
+
+    if "Entry Date" in right.columns:
+        right = _assign_answer_entry_dates_by_tolerance(left, right)
 
     merge_keys = ["Patient ID", "Pathway Name", "Content Name", "Entry Date"]
-    merged = pd.merge(left, right, on=merge_keys, how="left")
+    merged = pd.merge(left, right, on=merge_keys, how="left", suffixes=("", "_answer"))
 
     keep_cols = [
         col for col in [
             "Patient ID", "Pathway Name", "Content Name",
             "Scheduled date", "Entry Date",
-            "Question", "Answer Text", "Answer Value",
+            "Question", "Answer_Combined",
+            "Question_Normalized", "Content_Name_Normalized",
         ]
         if col in merged.columns
     ]
 
     df = merged[keep_cols].copy()
-
-    # Combine Answer Value and Answer Text into a single column
-    df["Answer_Combined"] = pd.NA
-    if "Answer Value" in df.columns:
-        df["Answer_Combined"] = df["Answer Value"]
-    if "Answer Text" in df.columns:
-        df["Answer_Combined"] = df["Answer_Combined"].fillna(df["Answer Text"])
 
     if "Patient ID" not in df.columns:
         raise ValueError(
@@ -235,11 +447,5 @@ def build_merged_table(primary_file, secondary_file):
         raise ValueError(
             f"'Question' not found after merge. Available columns: {list(df.columns)}"
         )
-
-    if "Question" in df.columns:
-        df["Question_Normalized"] = df["Question"].apply(normalize_question_text)
-
-    if "Content Name" in df.columns:
-        df["Content_Name_Normalized"] = df["Content Name"].apply(normalize_content_name)
 
     return df

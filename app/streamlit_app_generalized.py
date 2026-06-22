@@ -94,12 +94,15 @@ with tabs[0]:
     st.subheader("Step 1: Upload Your Files")
     
     st.info("""
-    Upload files for your transformation. For each file, specify its role:
+    Upload files for your transformation. Supported formats are **CSV** and **Excel (.xlsx)**.
+    For each file, specify its role:
     - **Answers**: Patient responses to questionnaires (REQUIRED)
     - **Scheduled Content**: Pathway/content information
     - **Demographics**: Age, sex, other patient attributes
     - **Endpoints**: Clinical endpoints, dates, outcomes
     - **Adherence**: Pathway completion/adherence tracking
+    
+    The demographics role can accept multiple files; they will be concatenated and merged together.
     """)
     
     # File upload interface
@@ -116,6 +119,7 @@ with tabs[0]:
     with col2:
         if uploaded_files:
             st.success(f"✅ {len(uploaded_files)} file(s) uploaded")
+            st.caption("Tip: you can upload Excel or CSV files here. Assign any metadata/enrichment files to the Demographics role and multiple files will be merged together.")
             
             # Display uploaded file info
             for file in uploaded_files:
@@ -305,8 +309,8 @@ with tabs[4]:
                     # Get files by role
                     answers_file = None
                     scheduled_file = None
-                    demographics_file = None
-                    
+                    demographics_files = []
+
                     for file_name, file_role in st.session_state.file_roles.items():
                         file = st.session_state.uploaded_files[file_name]
                         if file_role == FileRole.ANSWERS:
@@ -314,8 +318,27 @@ with tabs[4]:
                         elif file_role == FileRole.SCHEDULED_CONTENT:
                             scheduled_file = file
                         elif file_role == FileRole.DEMOGRAPHICS:
-                            demographics_file = file
-                    
+                            demographics_files.append(file)
+
+                    # If multiple demographics/enrichment files were provided, read and concatenate them
+                    demographics_file = None
+                    if demographics_files:
+                        demo_dfs = []
+                        for f in demographics_files:
+                            try:
+                                dfd = read_input_file(f)
+                                dfd = clean_columns(dfd)
+                                demo_dfs.append(dfd)
+                            except Exception as e:
+                                st.warning(f"Could not read demographics file {getattr(f, 'name', str(f))}: {e}")
+
+                        if demo_dfs:
+                            try:
+                                demographics_file = pd.concat(demo_dfs, ignore_index=True)
+                            except Exception:
+                                # fallback to first file if concat fails for any reason
+                                demographics_file = demo_dfs[0]
+
                     # Run transformation using appropriate workflow
                     result_df = process_files(
                         answers_file,

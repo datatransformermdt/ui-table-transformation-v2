@@ -1,5 +1,11 @@
 import pandas as pd
-from transformation_common import build_merged_table, merge_demographics, prepare_endpoint_file
+from transformation_common import (
+    build_answer_table,
+    build_content_base,
+    merge_demographics,
+    prepare_endpoint_file,
+    reorder_transformed_columns,
+)
 
 ITERATIVE_CONTENT_NAME_KEYWORDS = [
     "Allgemeine Gesundheit",  # Globale Gesundheitsumfrage / PROMIS-10
@@ -36,170 +42,192 @@ def sort_question_columns(cols):
     return sorted(cols, key=parse_column)
 
 
-def _fill_sentinel(series, sentinel_ts, sentinel_str):
-    """Fill NaN/NaT regardless of whether the column is datetime or object/str."""
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return series.fillna(sentinel_ts)
-    else:
-        return series.fillna(sentinel_str)
+def _build_question_iteration_column(row, has_content_name):
+    question = str(row["Question_Normalized"]).strip()
+    content_name = str(row["Content_Name_Normalized"]).strip() if has_content_name else ""
+    iteration = str(int(row["Iteration"]))
+
+    if row["Is_Iterative_Content"]:
+        if has_content_name:
+            return f"{question}_{content_name}_{iteration}"
+        return f"{question}_{iteration}"
+
+    if has_content_name:
+        return f"{question}_{content_name}"
+
+    return question
 
 
-def _restore_sentinel(series, sentinel_ts, sentinel_str):
-    """Put NaN/NaT back after pivot."""
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return series.replace(sentinel_ts, pd.NaT)
-    else:
-        return series.replace(sentinel_str, pd.NA)
+def _collapse_answer_groups(answers):
+    answers = answers.copy()
+    answers = answers.sort_values([
+        "Patient ID",
+        "Pathway Name",
+        "Content Name",
+        "Question_Normalized",
+        "Entry Date",
+    ], na_position="last")
+
+    collapsed_rows = []
+    conflicts = []
+    group_cols = ["Patient ID", "Pathway Name", "Question_Iteration"]
+
+    for _, group in answers.groupby(group_cols, sort=False):
+        last_row = group.iloc[-1].copy()
+        non_null_answers = group["Answer_Combined"].dropna().astype(str)
+
+        if not non_null_answers.empty:
+            if (
+                len(non_null_answers.unique()) > 1
+                and not group["Is_Iterative_Content"].iloc[0]
+            ):
+                conflicts.append({
+                    "Patient ID": last_row["Patient ID"],
+                    "Pathway Name": last_row["Pathway Name"],
+                    "Question_Iteration": last_row["Question_Iteration"],
+                    "values": non_null_answers.unique().tolist(),
+                })
+            last_row["Answer_Combined"] = non_null_answers.iloc[-1]
+        else:
+            last_row["Answer_Combined"] = pd.NA
+
+        collapsed_rows.append(last_row)
+
+    collapsed = pd.DataFrame(collapsed_rows)
+    if not collapsed.empty:
+        collapsed = collapsed.reset_index(drop=True)
+    collapsed.attrs = {"conflicts": conflicts}
+    return collapsed
+
+
+def _validate_final_output(final, base):
+    expected_rows = len(base.drop_duplicates(subset=["Patient ID", "Pathway Name"]))
+    if final.shape[0] != expected_rows:
+        raise ValueError(
+            f"Final output row count {final.shape[0]} does not match expected base row count {expected_rows}."
+        )
+
+    if final.duplicated(subset=["Patient ID", "Pathway Name"]).any():
+        raise ValueError("Final output contains duplicate Patient ID + Pathway Name rows.")
+
+    if final.columns.duplicated().any():
+        raise ValueError("Final output contains duplicate column names.")
+
+    dot_zero_columns = [col for col in final.columns if isinstance(col, str) and col.endswith(".0")]
+    if dot_zero_columns:
+        raise ValueError(
+            f"Final output contains invalid .0 suffixes: {dot_zero_columns}"
+        )
 
 
 def process_iterative_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None):
     """
     Iterative questionnaire workflow.
 
-    Output: one row per patient, with repeated question answers suffixed
-    _1, _2, _3 … in chronological order by Entry Date.
+    Output: one row per patient/pathway, with repeated question answers suffixed
+    _1, _2, _3 … for true iterative content.
 
-    When there are multiple questionnaires (Content Name varies):
-    - Column names include the questionnaire name: Question_QuestionnaireName_1
-    When there is only one questionnaire:
-    - Column names use simple iteration: Question_1, Question_2
-
-    Rows where Scheduled date (or any other date) is missing are fully
-    preserved — NaT/NaN is replaced with a sentinel before pivoting so
-    pandas does not silently discard those rows.
+    Non-iterative repeated answers are collapsed to the latest non-empty value.
     """
-    df = build_merged_table(primary_file, secondary_file)
+    base = build_content_base(primary_file)
+    answers = build_answer_table(primary_file, secondary_file)
 
-    id_cols   = [col for col in ["Patient ID", "Pathway Name"] if col in df.columns]
-    date_cols = [col for col in ["Scheduled date", "Entry Date"] if col in df.columns]
-    
-    # Detect if there are multiple questionnaires.
-    has_content_name = "Content Name" in df.columns
-    content_col = "Content_Name_Normalized" if "Content_Name_Normalized" in df.columns else "Content Name"
-    multiple_questionnaires = has_content_name and (df.groupby(id_cols)[content_col].nunique() > 1).any()
+    # Remove rows with blank/missing questions so we don't generate "nan_" columns.
+    # Keep a report of rows where Question is blank but an answer exists.
+    try:
+        import pandas as _pd
+    except Exception:
+        _pd = pd
 
-    SENTINEL_TS  = pd.Timestamp("1900-01-01")
-    SENTINEL_STR = "___MISSING___"
+    # Normalize obvious string representations of missing values on the raw Question column
+    answers["Question"] = answers["Question"].replace(["nan", "NaN", ""], pd.NA)
 
-    # ── Step 1: pivot to one row per event, keeping NaN rows via sentinel ──
-    df_pivot = df.copy()
-    for col in date_cols:
-        df_pivot[col] = _fill_sentinel(df_pivot[col], SENTINEL_TS, SENTINEL_STR)
-
-    pivot_idx = id_cols + date_cols
-    if multiple_questionnaires:
-        pivot_idx = pivot_idx + [content_col]
-
-    event_rows = df_pivot[pivot_idx].drop_duplicates()
-    question_wide = (
-        df_pivot.dropna(subset=["Question_Normalized"])
-        .pivot_table(
-            index=pivot_idx,
-            columns="Question_Normalized",
-            values="Answer_Combined",
-            aggfunc="first",
-        )
-        .reset_index()
+    # Report rows where Question is blank/missing but there is an answer present
+    blank_q_mask = (
+        answers["Question"].isna()
+        | answers["Question"].astype(str).str.strip().eq("")
+        | answers["Question"].astype(str).str.lower().eq("nan")
     )
 
-    wide_per_event = event_rows.merge(question_wide, on=pivot_idx, how="left")
-    wide_per_event.columns.name = None
+    report_mask = blank_q_mask & answers["Answer_Combined"].notna()
+    blank_question_report = answers.loc[report_mask, [
+        "Patient ID", "Pathway Name", "Content Name", "Entry Date", "Answer Text", "Answer Value"
+    ]].copy()
 
-    # Restore sentinels to NaN/NaT
-    for col in date_cols:
-        wide_per_event[col] = _restore_sentinel(wide_per_event[col], SENTINEL_TS, SENTINEL_STR)
+    # Now drop any rows where Question is blank or normalizes to 'nan'
+    answers = answers[~blank_q_mask].copy()
 
-    # ── Step 2: sort by Entry Date (NaT last) so iteration order follows time ──
-    sort_key_col = "Entry Date" if "Entry Date" in wide_per_event.columns else (date_cols[0] if date_cols else None)
-    if sort_key_col:
-        sort_cols = id_cols + ([sort_key_col] if sort_key_col else [])
-        wide_per_event = (
-            wide_per_event
-            .sort_values(sort_cols, na_position="last")
-            .reset_index(drop=True)
-        )
-
-    # ── Step 3: assign iteration number per questionnaire event ──
-    # Use Content Name grouping so repeated entries within the same questionnaire
-    # type get their own ordinal number, while non-iterative questionnaires
-    # can still collapse into a single column later.
-    iteration_group = id_cols + ([content_col] if multiple_questionnaires else [])
-    wide_per_event["Iteration"] = (
-        wide_per_event.groupby(iteration_group).cumcount() + 1
-    )
-
-    # ── Step 4: melt back to long format ──
-    melt_id_vars = id_cols + ["Iteration"]
-    if multiple_questionnaires:
-        melt_id_vars = melt_id_vars + [content_col]
-    
-    non_value_cols = set(melt_id_vars + date_cols)
-    value_cols = [col for col in wide_per_event.columns if col not in non_value_cols]
-
-    melted = wide_per_event.melt(
-        id_vars=melt_id_vars,
-        value_vars=value_cols,
-        var_name="Question",
-        value_name="Value",
-    )
-
-    # Preserve rows with empty values here so unanswered questions still
-    # become columns in the final iterative output.
-
-    # ── Step 5: build Question column names ──
-    # Use iteration suffix only for known iterative questionnaires.
-    print(f"[DEBUG] Step 5: multiple_questionnaires={multiple_questionnaires}")
-    question = melted["Question"].astype(str).str.strip()
-    if has_content_name and multiple_questionnaires:
-        print(f"[DEBUG] Building Question_Iteration using Content Name, iterative content names will keep iteration")
-        content_name = melted[content_col].fillna("").astype(str).str.strip()
-        melted["Question_Iteration"] = question + "_" + content_name
-
-        iterative_mask = melted[content_col].apply(_is_iterative_content_name)
-        if iterative_mask.any():
-            melted.loc[iterative_mask, "Question_Iteration"] = (
-                melted.loc[iterative_mask, "Question_Iteration"]
-                + "_"
-                + melted.loc[iterative_mask, "Iteration"].astype(str)
+    if answers.empty:
+        final = base.copy()
+        final = merge_demographics(final, demographics_file)
+        if endpoint_file is not None:
+            endpoints = prepare_endpoint_file(endpoint_file)
+            final = final.merge(
+                endpoints,
+                on=["Patient ID", "Pathway Name"],
+                how="left",
+                suffixes=("", "_endpoint"),
             )
-        print(f"[DEBUG] Iterative rows: {iterative_mask.sum()}, non-iterative rows: {(~iterative_mask).sum()}")
-    elif has_content_name:
-        print(f"[DEBUG] Building Question_Iteration WITHOUT Content Name for single questionnaire")
-        melted["Question_Iteration"] = (
-            question + "_" + melted["Iteration"].astype(str)
-        )
-    else:
-        print(f"[DEBUG] Building Question_Iteration WITHOUT Content Name")
-        melted["Question_Iteration"] = (
-            question + "_" + melted["Iteration"].astype(str)
-        )
+        _validate_final_output(final, base)
+        if output_file:
+            final.to_csv(output_file, index=False, encoding="utf-8-sig")
+        return final
 
-    final = melted.pivot_table(
-        index=id_cols,
+    answers = answers.merge(
+        base[["Patient ID", "Pathway Name"]],
+        on=["Patient ID", "Pathway Name"],
+        how="inner",
+    )
+
+    answers["Is_Iterative_Content"] = answers["Content Name"].apply(_is_iterative_content_name)
+    answers = answers.sort_values([
+        "Patient ID",
+        "Pathway Name",
+        "Content Name",
+        "Question_Normalized",
+        "Entry Date",
+    ], na_position="last")
+
+    answers["Iteration"] = (
+        answers
+        .groupby([
+            "Patient ID",
+            "Pathway Name",
+            "Content Name",
+            "Question_Normalized",
+        ], dropna=False)
+        .cumcount()
+        + 1
+    )
+
+    has_content_name = "Content Name" in answers.columns
+
+    answers["Question_Iteration"] = answers.apply(
+        lambda row: _build_question_iteration_column(row, has_content_name),
+        axis=1,
+    )
+
+    collapsed = _collapse_answer_groups(answers)
+    conflicts = collapsed.attrs.get("conflicts", [])
+
+    final = collapsed.pivot_table(
+        index=["Patient ID", "Pathway Name"],
         columns="Question_Iteration",
-        values="Value",
+        values="Answer_Combined",
         aggfunc="first",
     ).reset_index()
-
-    base = df[id_cols].drop_duplicates()
-    final = base.merge(final, on=id_cols, how="left")
     final.columns.name = None
 
-    print(f"[DEBUG] After pivot: shape={final.shape}, 'Content Name' in columns={'Content Name' in final.columns}")
-    if 'Content Name' in final.columns:
-        print(f"[DEBUG] WARNING: Content Name should not be in final columns!")
-    print(f"[DEBUG] First 5 columns: {list(final.columns[:5])}")
+    final = base.merge(final, on=["Patient ID", "Pathway Name"], how="left")
 
-    # ── Step 6: order columns ──
-    base_cols    = [col for col in id_cols if col in final.columns]
-    dynamic_cols = [col for col in final.columns if col not in base_cols]
-    final = final[base_cols + sort_question_columns(dynamic_cols)]
+    # Attach the blank-question report (may be empty) so callers can offer it for download
+    final.attrs["blank_question_answers_report"] = blank_question_report
 
-    # ── Step 7: preserve all question columns ──
-    # Keep blank columns for rare or unanswered questionnaires so the
-    # output schema remains stable and empty questionnaire columns still appear.
-    #
-    # Note: columns are already ordered above; do not drop sparse iteration columns.
+    if conflicts:
+        final.attrs["conflicts"] = [
+            f"{conflict['Patient ID']}/{conflict['Pathway Name']}/{conflict['Question_Iteration']}: {conflict['values']}"
+            for conflict in conflicts
+        ]
 
     final = merge_demographics(final, demographics_file)
     if endpoint_file is not None:
@@ -211,12 +239,14 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
             suffixes=("", "_endpoint"),
         )
 
-    if any(col in final.columns for col in ["Age", "Sex", "Gender"]):
-        demo_cols = [col for col in ["Age", "Sex", "Gender"] if col in final.columns]
-        base_cols = [col for col in ["Patient ID"] if col in final.columns]
-        remaining_id_cols = [col for col in ["Pathway Name"] if col in final.columns]
-        other_cols = [col for col in final.columns if col not in base_cols + demo_cols + remaining_id_cols]
-        final = final[base_cols + demo_cols + remaining_id_cols + other_cols]
+    final = reorder_transformed_columns(final, demographics_file)
+
+    # Ensure we did not accidentally create any columns beginning with 'nan_'
+    nan_cols = [col for col in final.columns if isinstance(col, str) and col.lower().startswith("nan_")]
+    if nan_cols:
+        raise ValueError(f"Final output contains invalid columns starting with 'nan_': {nan_cols}")
+
+    _validate_final_output(final, base)
 
     if output_file:
         final.to_csv(output_file, index=False, encoding="utf-8-sig")

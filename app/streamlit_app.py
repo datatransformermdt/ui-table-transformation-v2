@@ -1,7 +1,20 @@
 import base64
 import streamlit as st
+import pandas as pd
 from pathlib import Path
 from transformation import process_files
+from transformation_common import read_input_file, clean_columns
+
+
+def read_uploaded_file_with_reset(file):
+    try:
+        return read_input_file(file)
+    finally:
+        try:
+            if hasattr(file, "seek"):
+                file.seek(0)
+        except Exception:
+            pass
 
 
 def img_to_base64(path: Path) -> str:
@@ -204,7 +217,11 @@ st.markdown(
 # ── Session state ──────────────────────────────────────────────────────────────
 primary_done      = st.session_state.get("primary_file") is not None
 secondary_done    = st.session_state.get("secondary_file") is not None
-demographics_done = st.session_state.get("demographics_file") is not None
+demographics_val  = st.session_state.get("demographics_file")
+if isinstance(demographics_val, list):
+    demographics_done = len(demographics_val) > 0
+else:
+    demographics_done = demographics_val is not None
 required_done     = primary_done and secondary_done
 
 # ── Hero ───────────────────────────────────────────────────────────────────────
@@ -314,11 +331,16 @@ with col2:
 with col3:
     card_cls = "upload-card done" if demographics_done else "upload-card"
     if demographics_done:
-        fname = st.session_state["demographics_file"].name
+        df_val = st.session_state.get("demographics_file")
+        if isinstance(df_val, list):
+            names = ", ".join(getattr(f, "name", str(f)) for f in df_val)
+            status_text = f"{names} — uploaded"
+        else:
+            status_text = f"{getattr(df_val, 'name', str(df_val))} — uploaded"
         status_block = (
             '<div class="upload-status">'
             '<div class="upload-status-dot"></div>'
-            '<div class="upload-status-text">' + fname + ' — uploaded</div>'
+            '<div class="upload-status-text">' + status_text + '</div>'
             '</div>'
         )
     else:
@@ -327,11 +349,11 @@ with col3:
         '<div class="' + card_cls + '">'
         '<div class="upload-card-file-label">File 3 of 3 (optional)</div>'
         '<div class="upload-card-title">Patient metadata / enrichment file</div>'
-        '<div class="upload-card-desc">Optional file with extra patient or pathway-level columns. It merges by Patient ID and Pathway Name when available.</div>'
+        '<div class="upload-card-desc">Optional file(s) with extra patient or pathway-level columns. Supports CSV and Excel (.xlsx), and you can upload more than one enrichment file here. It merges by Patient ID and Pathway Name when available.</div>'
         '<div class="upload-card-example">'
         '<div class="workflow-example-label">Source columns</div>'
         '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Age</th><th>Sex</th><th>Other fields</th></tr></table>'
-        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Optional file name: <span>metadata.csv</span></div>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Optional files: <span>metadata1.csv</span>, <span>metadata2.xlsx</span></div>'
         '</div>'
         + status_block + '</div>',
         unsafe_allow_html=True,
@@ -339,9 +361,11 @@ with col3:
     st.file_uploader(
         "Patient metadata / enrichment file",
         type=["csv", "xlsx"],
+        accept_multiple_files=True,
         key="demographics_file",
         label_visibility="collapsed",
     )
+    st.caption("You can select more than one file here; all selected enrichment files are merged together.")
 
 st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
@@ -433,11 +457,34 @@ if required_done:
     if st.button("▶  Generate transformed file"):
         try:
             with st.spinner("Processing your data…"):
+                # Handle multiple demographics/enrichment files if provided
+                demographics_arg = None
+                demo_val = st.session_state.get("demographics_file")
+                if demo_val:
+                    if isinstance(demo_val, list):
+                        demo_dfs = []
+                        for f in demo_val:
+                            try:
+                                dfd = read_uploaded_file_with_reset(f)
+                                dfd = clean_columns(dfd)
+                                demo_dfs.append(dfd)
+                            except Exception:
+                                # ignore unreadable enrichment files but warn later
+                                pass
+                        if demo_dfs:
+                            demographics_arg = pd.concat(demo_dfs, ignore_index=True)
+                    else:
+                        try:
+                            dfd = read_uploaded_file_with_reset(demo_val)
+                            demographics_arg = clean_columns(dfd)
+                        except Exception:
+                            demographics_arg = None
+
                 result_df = process_files(
                     st.session_state["primary_file"],
                     st.session_state["secondary_file"],
                     workflow=workflow,
-                    demographics_file=st.session_state.get("demographics_file"),
+                    demographics_file=demographics_arg,
                 )
 
             display_df = result_df.copy()

@@ -63,7 +63,7 @@ streamlit run app/streamlit_app_generalized.py
 
 This provides a step-by-step workflow:
 
-1. **Upload Files** - Load your data files
+1. **Upload Files** - Load your data files. The generalized app now accepts multiple enrichment/demographics files: assign each uploaded demographics/enrichment file the `Demographics` role and the app will concatenate them before merging.
 2. **Assign Roles** - Specify which file is Answers, Scheduled Content, Demographics, etc.
 3. **Map Columns** - Auto-detect or manually map your column names to standard internal names
 4. **Configure** - Select iterative content, set non-iterative repeat policy
