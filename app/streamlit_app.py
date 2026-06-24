@@ -1,4 +1,6 @@
 import base64
+import io
+import importlib
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -454,6 +456,18 @@ st.markdown(
 )
 
 if required_done:
+    # Let users choose download format before generating the file
+    has_openpyxl = importlib.util.find_spec("openpyxl") is not None
+    if not has_openpyxl:
+        st.info("Excel export requires the `openpyxl` package. Install it to enable .xlsx downloads.")
+    formats = ["CSV (.csv)"] + (["Excel (.xlsx)"] if has_openpyxl else [])
+    export_format = st.selectbox(
+        "Download format",
+        formats,
+        index=0,
+        help="Choose whether to download the transformed data as CSV or Excel",
+    )
+
     if st.button("▶  Generate transformed file"):
         try:
             with st.spinner("Processing your data…"):
@@ -507,14 +521,32 @@ if required_done:
             st.markdown('<div class="section-label" style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">Preview — first rows of your output</div>', unsafe_allow_html=True)
             st.dataframe(display_df, width='stretch', height=380)
 
-            csv_data = result_df.to_csv(index=False).encode("utf-8-sig")
-
             st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
+
+            # Use export_format chosen before generation
+            if export_format.startswith("CSV"):
+                data_bytes = result_df.to_csv(index=False).encode("utf-8-sig")
+                file_name = "patient_data_transformed.csv"
+                mime = "text/csv"
+            else:
+                try:
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                        result_df.to_excel(writer, index=False, sheet_name="data")
+                    data_bytes = output.getvalue()
+                    file_name = "patient_data_transformed.xlsx"
+                    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                except Exception as e:
+                    st.error(f"Excel export failed ({e}); falling back to CSV.")
+                    data_bytes = result_df.to_csv(index=False).encode("utf-8-sig")
+                    file_name = "patient_data_transformed.csv"
+                    mime = "text/csv"
+
             st.download_button(
-                label="⬇  Download your Excel-ready file (.csv)",
-                data=csv_data,
-                file_name="patient_data_transformed.csv",
-                mime="text/csv",
+                label=f"⬇  Download transformed file ({file_name})",
+                data=data_bytes,
+                file_name=file_name,
+                mime=mime,
             )
 
         except Exception as e:

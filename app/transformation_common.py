@@ -268,19 +268,64 @@ def read_demographics_file(file):
     return demo
 
 
+def _sort_question_column(col_with_index):
+    col, index = col_with_index
+    if not isinstance(col, str):
+        return ("", "", 0, index)
+
+    parts = col.rsplit("_", maxsplit=1)
+    if len(parts) == 2 and parts[1].isdigit():
+        question_part, iteration = parts[0], int(parts[1])
+        question_parts = question_part.rsplit("_", maxsplit=1)
+        if len(question_parts) == 2:
+            question_text, content_name = question_parts
+            return (content_name.strip().lower(), question_text.strip().lower(), iteration, index)
+        return ("", question_part.strip().lower(), iteration, index)
+
+    if len(parts) == 2:
+        question_text, content_name = parts
+        return (content_name.strip().lower(), question_text.strip().lower(), 0, index)
+
+    return ("", col.strip().lower(), 0, index)
+
+
+def _sort_question_columns(cols):
+    return [col for col, _ in sorted(
+        ((col, idx) for idx, col in enumerate(cols)),
+        key=_sort_question_column,
+    )]
+
+
 def reorder_transformed_columns(final, demographics_file=None):
-    base_cols = [col for col in ["Patient ID", "Pathway Name"] if col in final.columns]
+    primary_id_cols = [col for col in ["Patient ID"] if col in final.columns]
     demo_cols = []
     if demographics_file is not None:
         if isinstance(demographics_file, pd.DataFrame):
             demo = clean_columns(demographics_file.copy())
         else:
             demo = read_demographics_file(demographics_file)
-        demo_cols = [col for col in demo.columns if col not in base_cols]
+        demo_cols = [col for col in demo.columns if col not in primary_id_cols + ["Pathway Name"]]
         demo_cols = [col for col in demo_cols if col in final.columns]
 
+    path_cols = [col for col in ["Pathway Name"] if col in final.columns]
+    content_cols = [col for col in ["Content Name"] if col in final.columns]
     endpoint_cols = [col for col in final.columns if isinstance(col, str) and col.startswith("Endpoint_")]
-    ordered_cols = base_cols + demo_cols + endpoint_cols + [col for col in final.columns if col not in base_cols + demo_cols + endpoint_cols]
+
+    other_cols = [
+        col for col in final.columns
+        if col not in primary_id_cols + demo_cols + path_cols + content_cols + endpoint_cols
+    ]
+
+    ordered_question_cols = _sort_question_columns(other_cols)
+
+    ordered_cols = (
+        primary_id_cols
+        + path_cols
+        + demo_cols
+        + content_cols
+        + endpoint_cols
+        + ordered_question_cols
+    )
     return final[ordered_cols]
 
 
