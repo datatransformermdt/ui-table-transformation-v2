@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from transformation_common import build_merged_table, merge_demographics, prepare_endpoint_file, reorder_transformed_columns
 
@@ -52,17 +53,25 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
 
     final = merge_demographics(final, demographics_file)
     if endpoint_file is not None:
+        if os.getenv("DEBUG_ENDPOINT_MAPPING", "0").lower() not in {"0", "false", "off"}:
+            print('DEBUG: process_normal_files - final before endpoint merge columns:', list(final.columns))
+            print(final.filter(regex='Entlassung|Endpoint_Entlassung').head(5).to_dict('records'))
         endpoints = prepare_endpoint_file(endpoint_file)
+        if os.getenv("DEBUG_ENDPOINT_MAPPING", "0").lower() not in {"0", "false", "off"}:
+            print('DEBUG: process_normal_files - endpoint file columns:', list(endpoints.columns))
         final = final.merge(
             endpoints,
             on=["Patient ID", "Pathway Name"],
             how="left",
             suffixes=("", "_endpoint"),
         )
+        if os.getenv("DEBUG_ENDPOINT_MAPPING", "0").lower() not in {"0", "false", "off"}:
+            print('DEBUG: process_normal_files - final after endpoint merge columns:', list(final.columns))
+            print(final.filter(regex='Entlassung|Endpoint_Entlassung').head(5).to_dict('records'))
 
     final = reorder_transformed_columns(final, demographics_file)
 
     if output_file:
-        final.to_csv(output_file, index=False, encoding="utf-8-sig")
+        final.to_csv(output_file, index=False, encoding='utf-8-sig')
 
     return final

@@ -1,9 +1,18 @@
 import io
+import os
 import re
 import unicodedata
 
 import pandas as pd
 from pathlib import Path
+
+DEBUG_ENDPOINT_MAPPING = os.getenv("DEBUG_ENDPOINT_MAPPING", "0").lower() not in {"0", "false", "off"}
+
+def _debug_endpoint_series(stage, col, series):
+    print(f"DEBUG: {stage} - {col}")
+    print(" dtype:", series.dtype)
+    print(series.astype("object").value_counts(dropna=False).head(20))
+    print(" head:", series.head(10).tolist())
 
 
 def _find_excel_header_row(df):
@@ -218,6 +227,11 @@ def prepare_endpoint_file(endpoint_file):
     ]
 
     if available_discharge_cols:
+        if DEBUG_ENDPOINT_MAPPING:
+            print('DEBUG: prepare_endpoint_file - after read_input_file')
+            for col in available_discharge_cols:
+                _debug_endpoint_series('before mapping', col, endpoints[col])
+
         def derive_discharge_modality(row):
             active = [
                 col.replace("Entlassung ", "")
@@ -241,6 +255,39 @@ def prepare_endpoint_file(endpoint_file):
             endpoints[available_discharge_cols].fillna(0).sum(axis=1) > 1
         )
 
+        def _map_entlassung_value(value):
+            if pd.isna(value):
+                return pd.NA
+
+            if isinstance(value, str):
+                normalized = value.replace("\xa0", " ").strip()
+                if normalized in {"", "0", "0.0"}:
+                    return pd.NA
+                if normalized in {"1", "1.0"}:
+                    return "Ja"
+
+            if isinstance(value, bool):
+                return "Ja" if value else pd.NA
+
+            try:
+                numeric_value = float(value)
+                if numeric_value == 1:
+                    return "Ja"
+                if numeric_value == 0:
+                    return pd.NA
+            except (TypeError, ValueError):
+                pass
+
+            return value
+
+        for col in available_discharge_cols:
+            endpoints[col] = endpoints[col].map(_map_entlassung_value)
+
+        if DEBUG_ENDPOINT_MAPPING:
+            print('DEBUG: prepare_endpoint_file - after mapping')
+            for col in available_discharge_cols:
+                _debug_endpoint_series('after mapping', col, endpoints[col])
+
     key_cols = ["Patient ID", "Pathway Name"]
     rename_map = {}
     for col in endpoints.columns:
@@ -248,6 +295,12 @@ def prepare_endpoint_file(endpoint_file):
             rename_map[col] = f"Endpoint_{col}"
 
     endpoints = endpoints.rename(columns=rename_map)
+    if DEBUG_ENDPOINT_MAPPING and available_discharge_cols:
+        print('DEBUG: prepare_endpoint_file - after rename')
+        for col in available_discharge_cols:
+            new_col = f'Endpoint_{col}'
+            if new_col in endpoints.columns:
+                _debug_endpoint_series('after rename', new_col, endpoints[new_col])
     return endpoints
 
 

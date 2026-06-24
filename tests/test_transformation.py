@@ -249,5 +249,27 @@ class TransformationIterativeTest(unittest.TestCase):
             self.assertListEqual(list(read_df.columns), list(content.columns))
             self.assertEqual(read_df.loc[0, 'Patient ID'], 1)
 
+    def test_prepare_endpoint_file_converts_entlassung_1_0_to_ja(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            endpoint_path = os.path.join(tmpdir, 'endpoints.csv')
+            endpoints = pd.DataFrame([
+                {
+                    'Patient ID': 1,
+                    'Pathway Name': 'P',
+                    'Entlassung Exitus': 1.0,
+                    'Entlassung Nachhause': 0.0,
+                    'Entlassung Pflegeheim': '1.0',
+                    'Entlassung AHB Reha': '0.0',
+                }
+            ])
+            endpoints.to_csv(endpoint_path, index=False)
+
+            prepared = tc.prepare_endpoint_file(endpoint_path)
+
+            self.assertEqual(prepared.loc[0, 'Endpoint_Entlassung Exitus'], 'Ja')
+            self.assertTrue(pd.isna(prepared.loc[0, 'Endpoint_Entlassung Nachhause']))
+            self.assertEqual(prepared.loc[0, 'Endpoint_Entlassung Pflegeheim'], 'Ja')
+            self.assertTrue(pd.isna(prepared.loc[0, 'Endpoint_Entlassung AHB Reha']))
+
 if __name__ == '__main__':
     unittest.main()
