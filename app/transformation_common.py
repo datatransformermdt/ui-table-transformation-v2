@@ -235,29 +235,6 @@ def prepare_endpoint_file(endpoint_file):
             for col in available_discharge_cols:
                 _debug_endpoint_series('before mapping', col, endpoints[col])
 
-        def derive_discharge_modality(row):
-            active = [
-                col.replace("Entlassung ", "")
-                for col in available_discharge_cols
-                if pd.notna(row[col]) and row[col] == 1
-            ]
-
-            if len(active) == 0:
-                return pd.NA
-            if len(active) == 1:
-                return active[0]
-
-            return "Multiple: " + ", ".join(active)
-
-        endpoints["Endpoint_Discharge modality"] = endpoints.apply(
-            derive_discharge_modality,
-            axis=1,
-        )
-
-        endpoints["Endpoint_Discharge modality conflict"] = (
-            endpoints[available_discharge_cols].fillna(0).sum(axis=1) > 1
-        )
-
         def _map_entlassung_value(value):
             if pd.isna(value):
                 return pd.NA
