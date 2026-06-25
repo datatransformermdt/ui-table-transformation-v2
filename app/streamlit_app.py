@@ -224,7 +224,6 @@ if isinstance(demographics_val, list):
     demographics_done = len(demographics_val) > 0
 else:
     demographics_done = demographics_val is not None
-endpoint_done     = st.session_state.get("endpoint_file") is not None
 required_done     = primary_done and secondary_done
 
 # ── Hero ───────────────────────────────────────────────────────────────────────
@@ -350,13 +349,15 @@ with col3:
         status_block = ""
     st.markdown(
         '<div class="' + card_cls + '">'
-        '<div class="upload-card-file-label">File 3 of 4 (optional)</div>'
-        '<div class="upload-card-title">Patient metadata / enrichment file</div>'
-        '<div class="upload-card-desc">Optional file(s) with extra patient or pathway-level columns. Supports CSV and Excel (.xlsx), and you can upload more than one enrichment file here. It merges by Patient ID and Pathway Name when available.</div>'
+        '<div class="upload-card-file-label">File 3 of 3 (optional)</div>'
+        '<div class="upload-card-title">Extra files</div>'
+        '<div class="upload-card-desc">Any additional patient or pathway-level files — enrichment/metadata <em>and/or</em> endpoint/outcome data. '
+        'You can upload more than one file. Each is merged by Patient ID and Pathway Name; '
+        'endpoint files (containing discharge or outcome columns) are detected automatically and their columns are prefixed with <em>Endpoint_</em> in the output.</div>'
         '<div class="upload-card-example">'
-        '<div class="workflow-example-label">Source columns</div>'
-        '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Age</th><th>Sex</th><th>Other fields</th></tr></table>'
-        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Optional files: <span>metadata1.csv</span>, <span>metadata2.xlsx</span></div>'
+        '<div class="workflow-example-label">Source columns (examples)</div>'
+        '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Age / Sex / …</th><th>Length of hospital stay</th><th>Entlassung …</th></tr></table>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Example files: <span>metadata.csv</span>, <span>endpoints.xlsx</span></div>'
         '</div>'
         + status_block + '</div>',
         unsafe_allow_html=True,
@@ -368,43 +369,7 @@ with col3:
         key="demographics_file",
         label_visibility="collapsed",
     )
-    st.caption("You can select more than one file here; all selected enrichment files are merged together.")
-
-# ── Endpoint file (optional, full-width row) ──────────────────────────────────
-ep_col1, ep_col2 = st.columns([1, 2])
-
-with ep_col1:
-    ep_card_cls = "upload-card done" if endpoint_done else "upload-card"
-    if endpoint_done:
-        ep_fname = st.session_state["endpoint_file"].name
-        ep_status_block = (
-            '<div class="upload-status">'
-            '<div class="upload-status-dot"></div>'
-            '<div class="upload-status-text">' + ep_fname + ' — uploaded</div>'
-            '</div>'
-        )
-    else:
-        ep_status_block = ""
-    st.markdown(
-        '<div class="' + ep_card_cls + '">'
-        '<div class="upload-card-file-label">File 4 of 4 (optional)</div>'
-        '<div class="upload-card-title">Endpoint / outcomes file</div>'
-        '<div class="upload-card-desc">Optional file containing patient-level outcome or discharge data. '
-        'Must include Patient ID and Pathway Name; all other columns are prefixed with <em>Endpoint_</em> in the output.</div>'
-        '<div class="upload-card-example">'
-        '<div class="workflow-example-label">Source columns</div>'
-        '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Discharge date</th><th>Length of hospital stay</th><th>…</th></tr></table>'
-        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Example file name: <span>endpoints.csv</span></div>'
-        '</div>'
-        + ep_status_block + '</div>',
-        unsafe_allow_html=True,
-    )
-    st.file_uploader(
-        "Endpoint / outcomes file",
-        type=["csv", "xlsx"],
-        key="endpoint_file",
-        label_visibility="collapsed",
-    )
+    st.caption("You can select more than one file here; all extra files are processed automatically.")
 
 st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
@@ -508,39 +473,40 @@ if required_done:
     if st.button("▶  Generate transformed file"):
         try:
             with st.spinner("Processing your data…"):
-                # Handle multiple demographics/enrichment files if provided
-                demographics_arg = None
-                demo_val = st.session_state.get("demographics_file")
-                if demo_val:
-                    if isinstance(demo_val, list):
-                        demo_dfs = []
-                        for f in demo_val:
-                            try:
-                                dfd = read_uploaded_file_with_reset(f)
-                                dfd = clean_columns(dfd)
-                                demo_dfs.append(dfd)
-                            except Exception:
-                                # ignore unreadable enrichment files but warn later
-                                pass
-                        if demo_dfs:
-                            demographics_arg = pd.concat(demo_dfs, ignore_index=True)
-                    else:
-                        try:
-                            dfd = read_uploaded_file_with_reset(demo_val)
-                            demographics_arg = clean_columns(dfd)
-                        except Exception:
-                            demographics_arg = None
+                # Columns whose presence marks a file as an endpoint/outcome file
+                _ENDPOINT_COLS = {
+                    "Length of hospital stay",
+                    "Entlassung Exitus",
+                    "Entlassung Nachhause",
+                    "Entlassung Pflegeheim",
+                    "Entlassung AHB Reha",
+                }
 
-                endpoint_file_arg = st.session_state.get("endpoint_file")
-                if endpoint_file_arg is not None and hasattr(endpoint_file_arg, "seek"):
-                    endpoint_file_arg.seek(0)
+                # Read all extra files and auto-route each one
+                demographics_arg = None
+                endpoint_df_arg  = None
+                extra_val = st.session_state.get("demographics_file")
+                extra_files = extra_val if isinstance(extra_val, list) else ([extra_val] if extra_val else [])
+                demo_dfs = []
+                for f in extra_files:
+                    try:
+                        dfd = read_uploaded_file_with_reset(f)
+                        dfd = clean_columns(dfd)
+                        if set(dfd.columns) & _ENDPOINT_COLS:
+                            endpoint_df_arg = dfd   # DataFrame — prepare_endpoint_file now accepts this
+                        else:
+                            demo_dfs.append(dfd)
+                    except Exception:
+                        pass
+                if demo_dfs:
+                    demographics_arg = pd.concat(demo_dfs, ignore_index=True)
 
                 result_df = process_files(
                     st.session_state["primary_file"],
                     st.session_state["secondary_file"],
                     workflow=workflow,
                     demographics_file=demographics_arg,
-                    endpoint_file=endpoint_file_arg,
+                    endpoint_file=endpoint_df_arg,
                 )
 
             display_df = result_df.copy()

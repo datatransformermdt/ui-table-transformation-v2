@@ -200,7 +200,10 @@ def require_columns(df, required_cols, df_name):
 
 
 def prepare_endpoint_file(endpoint_file):
-    endpoints = clean_columns(read_input_file(endpoint_file))
+    if isinstance(endpoint_file, pd.DataFrame):
+        endpoints = clean_columns(endpoint_file.copy())
+    else:
+        endpoints = clean_columns(read_input_file(endpoint_file))
     require_columns(endpoints, ["Patient ID", "Pathway Name"], "endpoint file")
 
     duplicate_count = endpoints.duplicated(subset=["Patient ID", "Pathway Name"]).sum()
