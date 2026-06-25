@@ -32,7 +32,14 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
         else:
             df_pivot[col] = df_pivot[col].fillna(SENTINEL_STR)
 
-    pivot_question_col = "Question_Normalized" if "Question_Normalized" in df_pivot.columns else "Question"
+    # Build ContentName_Question label for pivot column headers
+    if "Content_Name_Normalized" in df_pivot.columns:
+        _q = "Question_Normalized" if "Question_Normalized" in df_pivot.columns else "Question"
+        df_pivot["_col_label"] = df_pivot["Content_Name_Normalized"] + "_" + df_pivot[_q]
+        pivot_question_col = "_col_label"
+    else:
+        pivot_question_col = "Question_Normalized" if "Question_Normalized" in df_pivot.columns else "Question"
+
     final = df_pivot.pivot_table(
         index=id_cols + date_cols,
         columns=pivot_question_col,

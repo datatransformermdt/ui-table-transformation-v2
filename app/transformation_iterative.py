@@ -49,11 +49,11 @@ def _build_question_iteration_column(row, has_content_name):
 
     if row["Is_Iterative_Content"]:
         if has_content_name:
-            return f"{question}_{content_name}_{iteration}"
-        return f"{question}_{iteration}"
+            return f"{content_name}_{iteration}_{question}"
+        return f"{iteration}_{question}"
 
     if has_content_name:
-        return f"{question}_{content_name}"
+        return f"{content_name}_{question}"
 
     return question
 

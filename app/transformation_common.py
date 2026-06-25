@@ -325,24 +325,22 @@ def read_demographics_file(file):
 
 
 def _sort_question_column(col_with_index):
+    """Sort key for ContentName_Iteration_Question (or ContentName_Question) format."""
     col, index = col_with_index
     if not isinstance(col, str):
-        return ("", "", 0, index)
+        return ("", 0, "", index)
 
-    parts = col.rsplit("_", maxsplit=1)
-    if len(parts) == 2 and parts[1].isdigit():
-        question_part, iteration = parts[0], int(parts[1])
-        question_parts = question_part.rsplit("_", maxsplit=1)
-        if len(question_parts) == 2:
-            question_text, content_name = question_parts
-            return (content_name.strip().lower(), question_text.strip().lower(), iteration, index)
-        return ("", question_part.strip().lower(), iteration, index)
+    # ContentName_N_Question  (iterative)
+    m = re.match(r"^(.+?)_(\d+)_(.+)$", col)
+    if m:
+        return (m.group(1).strip().lower(), int(m.group(2)), m.group(3).strip().lower(), index)
 
+    # ContentName_Question  (non-iterative with content prefix)
+    parts = col.split("_", 1)
     if len(parts) == 2:
-        question_text, content_name = parts
-        return (content_name.strip().lower(), question_text.strip().lower(), 0, index)
+        return (parts[0].strip().lower(), 0, parts[1].strip().lower(), index)
 
-    return ("", col.strip().lower(), 0, index)
+    return ("", 0, col.strip().lower(), index)
 
 
 def _sort_question_columns(cols):
@@ -354,6 +352,8 @@ def _sort_question_columns(cols):
 
 def reorder_transformed_columns(final, demographics_file=None):
     primary_id_cols = [col for col in ["Patient ID"] if col in final.columns]
+    path_cols       = [col for col in ["Pathway Name"] if col in final.columns]
+
     demo_cols = []
     if demographics_file is not None:
         if isinstance(demographics_file, pd.DataFrame):
@@ -363,24 +363,24 @@ def reorder_transformed_columns(final, demographics_file=None):
         demo_cols = [col for col in demo.columns if col not in primary_id_cols + ["Pathway Name"]]
         demo_cols = [col for col in demo_cols if col in final.columns]
 
-    path_cols = [col for col in ["Pathway Name"] if col in final.columns]
-    content_cols = [col for col in ["Content Name"] if col in final.columns]
-    endpoint_cols = [col for col in final.columns if isinstance(col, str) and col.startswith("Endpoint_")]
+    endpoint_cols = sorted(
+        [col for col in final.columns if isinstance(col, str) and col.startswith("Endpoint_")]
+    )
+    # Structural columns present only in the normal (non-iterative) workflow
+    content_cols  = [col for col in ["Content Name"] if col in final.columns]
+    date_cols     = [col for col in ["Scheduled date", "Entry Date"] if col in final.columns]
 
-    other_cols = [
-        col for col in final.columns
-        if col not in primary_id_cols + demo_cols + path_cols + content_cols + endpoint_cols
-    ]
-
-    ordered_question_cols = _sort_question_columns(other_cols)
+    fixed = set(primary_id_cols + path_cols + demo_cols + endpoint_cols + content_cols + date_cols)
+    question_cols = [col for col in final.columns if col not in fixed]
 
     ordered_cols = (
-        primary_id_cols
-        + path_cols
-        + demo_cols
-        + content_cols
-        + endpoint_cols
-        + ordered_question_cols
+        primary_id_cols       # Patient ID
+        + path_cols           # Pathway Name
+        + demo_cols           # enrichment / demographics
+        + endpoint_cols       # Endpoint_* columns
+        + content_cols        # Content Name  (normal workflow only)
+        + date_cols           # Scheduled date, Entry Date  (normal workflow only)
+        + _sort_question_columns(question_cols)  # ContentName_[N_]Question, grouped by questionnaire
     )
     return final[ordered_cols]
 
