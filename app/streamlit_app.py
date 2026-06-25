@@ -224,6 +224,7 @@ if isinstance(demographics_val, list):
     demographics_done = len(demographics_val) > 0
 else:
     demographics_done = demographics_val is not None
+endpoint_done     = st.session_state.get("endpoint_file") is not None
 required_done     = primary_done and secondary_done
 
 # ── Hero ───────────────────────────────────────────────────────────────────────
@@ -349,7 +350,7 @@ with col3:
         status_block = ""
     st.markdown(
         '<div class="' + card_cls + '">'
-        '<div class="upload-card-file-label">File 3 of 3 (optional)</div>'
+        '<div class="upload-card-file-label">File 3 of 4 (optional)</div>'
         '<div class="upload-card-title">Patient metadata / enrichment file</div>'
         '<div class="upload-card-desc">Optional file(s) with extra patient or pathway-level columns. Supports CSV and Excel (.xlsx), and you can upload more than one enrichment file here. It merges by Patient ID and Pathway Name when available.</div>'
         '<div class="upload-card-example">'
@@ -368,6 +369,42 @@ with col3:
         label_visibility="collapsed",
     )
     st.caption("You can select more than one file here; all selected enrichment files are merged together.")
+
+# ── Endpoint file (optional, full-width row) ──────────────────────────────────
+ep_col1, ep_col2 = st.columns([1, 2])
+
+with ep_col1:
+    ep_card_cls = "upload-card done" if endpoint_done else "upload-card"
+    if endpoint_done:
+        ep_fname = st.session_state["endpoint_file"].name
+        ep_status_block = (
+            '<div class="upload-status">'
+            '<div class="upload-status-dot"></div>'
+            '<div class="upload-status-text">' + ep_fname + ' — uploaded</div>'
+            '</div>'
+        )
+    else:
+        ep_status_block = ""
+    st.markdown(
+        '<div class="' + ep_card_cls + '">'
+        '<div class="upload-card-file-label">File 4 of 4 (optional)</div>'
+        '<div class="upload-card-title">Endpoint / outcomes file</div>'
+        '<div class="upload-card-desc">Optional file containing patient-level outcome or discharge data. '
+        'Must include Patient ID and Pathway Name; all other columns are prefixed with <em>Endpoint_</em> in the output.</div>'
+        '<div class="upload-card-example">'
+        '<div class="workflow-example-label">Source columns</div>'
+        '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Discharge date</th><th>Length of hospital stay</th><th>…</th></tr></table>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Example file name: <span>endpoints.csv</span></div>'
+        '</div>'
+        + ep_status_block + '</div>',
+        unsafe_allow_html=True,
+    )
+    st.file_uploader(
+        "Endpoint / outcomes file",
+        type=["csv", "xlsx"],
+        key="endpoint_file",
+        label_visibility="collapsed",
+    )
 
 st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
@@ -494,11 +531,16 @@ if required_done:
                         except Exception:
                             demographics_arg = None
 
+                endpoint_file_arg = st.session_state.get("endpoint_file")
+                if endpoint_file_arg is not None and hasattr(endpoint_file_arg, "seek"):
+                    endpoint_file_arg.seek(0)
+
                 result_df = process_files(
                     st.session_state["primary_file"],
                     st.session_state["secondary_file"],
                     workflow=workflow,
                     demographics_file=demographics_arg,
+                    endpoint_file=endpoint_file_arg,
                 )
 
             display_df = result_df.copy()
