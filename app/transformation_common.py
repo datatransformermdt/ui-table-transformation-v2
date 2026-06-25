@@ -1,4 +1,4 @@
-import io
+﻿import io
 import os
 import re
 import unicodedata
@@ -83,6 +83,11 @@ def _strip_accents(text):
     normalized = unicodedata.normalize("NFKD", str(text))
     return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
+# Invisible/formatting Unicode characters that appear in PDF/Excel text extraction
+# and cause identical questions to look different (e.g. soft hyphen mid-word).
+_INVISIBLE_CHARS = re.compile(
+    "­​‌‍\u200E\u200F⁠﻿"  # soft-hyphen + zero-width chars
+)
 
 def normalize_question_text(text):
     if pd.isna(text):
@@ -90,6 +95,7 @@ def normalize_question_text(text):
 
     text = str(text).strip()
     text = unicodedata.normalize("NFKC", text)
+    text = _INVISIBLE_CHARS.sub("", text)        # remove soft hyphen and zero-width chars
     text = re.sub(r"\s+([:;,.?!])", r"\1", text)
     text = re.sub(r"([:;,.?!])(?=\S)", r"\1 ", text)
     text = re.sub(r"\s+", " ", text).strip()
