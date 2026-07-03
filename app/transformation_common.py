@@ -179,15 +179,21 @@ def build_patient_base(content_file, demographics_file=None):
     """
     Build the full (Patient ID, Pathway Name) universe for the output.
 
-    Digital patients come from content_file. When demographics_file is
-    provided, analog patients (present in demographics but absent from the
-    questionnaire file) are also included so they appear in the output with
-    blank questionnaire columns.
+    Base = UNION of unique (Patient ID, Pathway Name) from content_file
+    and unique (Patient ID, Pathway Name) from demographics_file.
+    Analog patients (in demographics but absent from content) appear in the
+    output with blank questionnaire columns.
+
+    Questionnaire answers are always merged by the exact key
+    [Patient ID, Pathway Name] — never by Patient ID alone.
+
+    Returns (full_base, digital_base) where digital_base contains only the
+    rows originating from the questionnaire/content file.
     """
     digital_base = build_content_base(content_file)
 
     if demographics_file is None:
-        return digital_base
+        return digital_base, digital_base
 
     if isinstance(demographics_file, pd.DataFrame):
         demo = clean_columns(demographics_file.copy())
@@ -196,32 +202,96 @@ def build_patient_base(content_file, demographics_file=None):
 
     require_columns(demo, ["Patient ID"], "Enrichment file")
 
-    if "Pathway Name" in demo.columns:
-        demo_pairs = demo[["Patient ID", "Pathway Name"]].drop_duplicates()
-        merged = demo_pairs.merge(
-            digital_base[["Patient ID", "Pathway Name"]],
-            on=["Patient ID", "Pathway Name"],
-            how="left",
-            indicator=True,
-        )
-        analog = (
-            merged[merged["_merge"] == "left_only"][["Patient ID", "Pathway Name"]]
-            .reset_index(drop=True)
+    if "Pathway Name" not in demo.columns:
+        return digital_base, digital_base
+
+    demo_pairs = demo[["Patient ID", "Pathway Name"]].drop_duplicates()
+
+    full_base = (
+        pd.concat([digital_base, demo_pairs], ignore_index=True)
+        .drop_duplicates(subset=["Patient ID", "Pathway Name"])
+        .reset_index(drop=True)
+    )
+    return full_base, digital_base
+
+
+def _compute_analog_answer_stats(final_before_demo, digital_base):
+    """
+    Check whether any analog patient rows unexpectedly contain questionnaire
+    answers before demographics/endpoints are merged in.
+
+    Analog patients are those in final_before_demo but absent from digital_base.
+    Returns {"analog_with_answers": int, "analog_without_answers": int}.
+    """
+    _check = final_before_demo[["Patient ID", "Pathway Name"]].merge(
+        digital_base[["Patient ID", "Pathway Name"]],
+        on=["Patient ID", "Pathway Name"],
+        how="left",
+        indicator=True,
+    )
+    analog_mask = (_check["_merge"] == "left_only").values
+    n_analog = int(analog_mask.sum())
+
+    if n_analog == 0:
+        return {"analog_with_answers": 0, "analog_without_answers": 0}
+
+    q_cols = [c for c in final_before_demo.columns if c not in ["Patient ID", "Pathway Name"]]
+    if not q_cols:
+        return {"analog_with_answers": 0, "analog_without_answers": n_analog}
+
+    has_answer = final_before_demo.loc[analog_mask, q_cols].notna().any(axis=1)
+    return {
+        "analog_with_answers": int(has_answer.sum()),
+        "analog_without_answers": int((~has_answer).sum()),
+    }
+
+
+def build_transformation_report(final, digital_base, analog_answer_stats=None):
+    """
+    Generate a validation and diagnostic report for the transformation output.
+
+    Returns a dict with:
+      - total_rows: total patient-pathway rows in the output
+      - digital_patient_pathways: rows originating from the questionnaire file
+      - analog_only_patient_pathways: rows from demographics only (no questionnaire data)
+      - duplicate_patient_pathways: duplicate (Patient ID, Pathway Name) pairs — should be 0
+      - missing_patient_id: rows with blank Patient ID
+      - missing_pathway_name: rows with blank Pathway Name
+      - analog_with_answers: analog patients that unexpectedly have >=1 questionnaire answer
+      - analog_without_answers: analog patients with entirely blank questionnaire columns
+    """
+    report = {}
+
+    report["total_rows"] = len(final)
+    report["duplicate_patient_pathways"] = int(
+        final.duplicated(subset=["Patient ID", "Pathway Name"]).sum()
+    )
+    report["missing_patient_id"] = (
+        int(final["Patient ID"].isna().sum()) if "Patient ID" in final.columns else 0
+    )
+    report["missing_pathway_name"] = (
+        int(final["Pathway Name"].isna().sum()) if "Pathway Name" in final.columns else 0
+    )
+
+    _check = final[["Patient ID", "Pathway Name"]].merge(
+        digital_base[["Patient ID", "Pathway Name"]],
+        on=["Patient ID", "Pathway Name"],
+        how="left",
+        indicator=True,
+    )
+    report["digital_patient_pathways"] = int((_check["_merge"] == "both").sum())
+    report["analog_only_patient_pathways"] = int((_check["_merge"] == "left_only").sum())
+
+    if analog_answer_stats is not None:
+        report["analog_with_answers"] = analog_answer_stats.get("analog_with_answers", 0)
+        report["analog_without_answers"] = analog_answer_stats.get(
+            "analog_without_answers", report["analog_only_patient_pathways"]
         )
     else:
-        digital_ids = set(digital_base["Patient ID"].astype(str))
-        analog_ids = (
-            demo[["Patient ID"]].drop_duplicates()
-            .loc[lambda df: ~df["Patient ID"].astype(str).isin(digital_ids)]
-            .reset_index(drop=True)
-        )
-        analog = analog_ids.copy()
-        analog["Pathway Name"] = pd.NA
+        report["analog_with_answers"] = 0
+        report["analog_without_answers"] = report["analog_only_patient_pathways"]
 
-    if analog.empty:
-        return digital_base
-
-    return pd.concat([digital_base, analog], ignore_index=True).reset_index(drop=True)
+    return report
 
 
 def build_answer_table(content_file, answers_file):

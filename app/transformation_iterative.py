@@ -2,6 +2,8 @@ import pandas as pd
 from transformation_common import (
     build_answer_table,
     build_patient_base,
+    _compute_analog_answer_stats,
+    build_transformation_report,
     merge_demographics,
     prepare_endpoint_file,
     reorder_transformed_columns,
@@ -129,7 +131,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     Non-iterative repeated answers are collapsed to the latest non-empty value.
     """
-    base = build_patient_base(primary_file, demographics_file)
+    base, digital_base = build_patient_base(primary_file, demographics_file)
     answers = build_answer_table(primary_file, secondary_file)
 
     # Remove rows with blank/missing questions so we don't generate "nan_" columns.
@@ -169,6 +171,8 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
                 suffixes=("", "_endpoint"),
             )
         _validate_final_output(final, base)
+        final.attrs["blank_question_answers_report"] = blank_question_report
+        final.attrs["transformation_report"] = build_transformation_report(final, digital_base)
         if output_file:
             final.to_csv(output_file, index=False, encoding="utf-8-sig")
         return final
@@ -220,14 +224,10 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     final = base.merge(final, on=["Patient ID", "Pathway Name"], how="left")
 
-    # Attach the blank-question report (may be empty) so callers can offer it for download
-    final.attrs["blank_question_answers_report"] = blank_question_report
-
-    if conflicts:
-        final.attrs["conflicts"] = [
-            f"{conflict['Patient ID']}/{conflict['Pathway Name']}/{conflict['Question_Iteration']}: {conflict['values']}"
-            for conflict in conflicts
-        ]
+    # Check for unexpected questionnaire answers on analog patients.
+    # Must run here, before demographics/endpoints are merged in, so that
+    # the only non-null columns can be questionnaire answers.
+    analog_answer_stats = _compute_analog_answer_stats(final, digital_base)
 
     final = merge_demographics(final, demographics_file)
     if endpoint_file is not None:
@@ -247,6 +247,17 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         raise ValueError(f"Final output contains invalid columns starting with 'nan_': {nan_cols}")
 
     _validate_final_output(final, base)
+
+    # Attach all attrs last so downstream merges cannot clear them.
+    final.attrs["blank_question_answers_report"] = blank_question_report
+    if conflicts:
+        final.attrs["conflicts"] = [
+            f"{conflict['Patient ID']}/{conflict['Pathway Name']}/{conflict['Question_Iteration']}: {conflict['values']}"
+            for conflict in conflicts
+        ]
+    final.attrs["transformation_report"] = build_transformation_report(
+        final, digital_base, analog_answer_stats
+    )
 
     if output_file:
         final.to_csv(output_file, index=False, encoding="utf-8-sig")

@@ -1,6 +1,14 @@
 import os
 import pandas as pd
-from transformation_common import build_merged_table, build_patient_base, merge_demographics, prepare_endpoint_file, reorder_transformed_columns
+from transformation_common import (
+    build_merged_table,
+    build_patient_base,
+    _compute_analog_answer_stats,
+    build_transformation_report,
+    merge_demographics,
+    prepare_endpoint_file,
+    reorder_transformed_columns,
+)
 
 
 def process_normal_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None):
@@ -58,13 +66,17 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
         else:
             final[col] = final[col].replace(SENTINEL_STR, pd.NA)
 
-    # Include analog patients: those in the demographics file but absent from
-    # the questionnaire data. They get one blank row per (Patient ID, Pathway Name).
+    # Capture the digital patient-pathways before adding any analog rows.
+    # This is used for the transformation report and the analog answer check.
+    digital_base = final[["Patient ID", "Pathway Name"]].drop_duplicates().reset_index(drop=True)
+
+    # Include analog patients: those in demographics but absent from the
+    # questionnaire file. They get one blank row per (Patient ID, Pathway Name).
+    # Questionnaire answers are always merged by [Patient ID, Pathway Name] only.
     if demographics_file is not None:
-        full_base = build_patient_base(primary_file, demographics_file)
-        digital_pairs = final[["Patient ID", "Pathway Name"]].drop_duplicates()
+        full_base, _ = build_patient_base(primary_file, demographics_file)
         merged_check = full_base.merge(
-            digital_pairs,
+            digital_base,
             on=["Patient ID", "Pathway Name"],
             how="left",
             indicator=True,
@@ -80,6 +92,10 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
                 if col not in analog_rows.columns:
                     analog_rows[col] = pd.NA
             final = pd.concat([final, analog_rows[final.columns]], ignore_index=True)
+
+    # Verify analog patients have no questionnaire answers (must run before
+    # demographics/endpoints are merged in so non-null values = answers only).
+    analog_answer_stats = _compute_analog_answer_stats(final, digital_base)
 
     final = merge_demographics(final, demographics_file)
     if endpoint_file is not None:
@@ -100,6 +116,11 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
             print(final.filter(regex='Entlassung|Endpoint_Entlassung').head(5).to_dict('records'))
 
     final = reorder_transformed_columns(final, demographics_file)
+
+    # Attach all attrs last so downstream merges cannot clear them.
+    final.attrs["transformation_report"] = build_transformation_report(
+        final, digital_base, analog_answer_stats
+    )
 
     if output_file:
         final.to_csv(output_file, index=False, encoding='utf-8-sig')
