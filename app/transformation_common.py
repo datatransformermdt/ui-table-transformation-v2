@@ -68,6 +68,12 @@ def read_input_file(file):
 
 def clean_columns(df):
     df.columns = [str(col).strip() for col in df.columns]
+    # Strip whitespace from join-key columns so that "PathwayA " and "PathwayA"
+    # are treated as the same key across every file.  pandas .str.strip()
+    # preserves NaN values, so missing data is unaffected.
+    for col in ["Patient ID", "Pathway Name"]:
+        if col in df.columns and df[col].dtype == object:
+            df[col] = df[col].str.strip()
     return df
 
 
