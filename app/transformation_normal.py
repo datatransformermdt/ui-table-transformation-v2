@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from transformation_common import build_merged_table, merge_demographics, prepare_endpoint_file, reorder_transformed_columns
+from transformation_common import build_merged_table, build_patient_base, merge_demographics, prepare_endpoint_file, reorder_transformed_columns
 
 
 def process_normal_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None):
@@ -57,6 +57,29 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
             final[col] = final[col].replace(SENTINEL_DATE, pd.NaT)
         else:
             final[col] = final[col].replace(SENTINEL_STR, pd.NA)
+
+    # Include analog patients: those in the demographics file but absent from
+    # the questionnaire data. They get one blank row per (Patient ID, Pathway Name).
+    if demographics_file is not None:
+        full_base = build_patient_base(primary_file, demographics_file)
+        digital_pairs = final[["Patient ID", "Pathway Name"]].drop_duplicates()
+        merged_check = full_base.merge(
+            digital_pairs,
+            on=["Patient ID", "Pathway Name"],
+            how="left",
+            indicator=True,
+        )
+        analog_pairs = (
+            merged_check[merged_check["_merge"] == "left_only"]
+            [["Patient ID", "Pathway Name"]]
+            .reset_index(drop=True)
+        )
+        if not analog_pairs.empty:
+            analog_rows = analog_pairs.copy()
+            for col in final.columns:
+                if col not in analog_rows.columns:
+                    analog_rows[col] = pd.NA
+            final = pd.concat([final, analog_rows[final.columns]], ignore_index=True)
 
     final = merge_demographics(final, demographics_file)
     if endpoint_file is not None:

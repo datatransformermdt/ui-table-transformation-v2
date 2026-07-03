@@ -175,6 +175,55 @@ def build_content_base(content_file):
     return content[["Patient ID", "Pathway Name"]].drop_duplicates()
 
 
+def build_patient_base(content_file, demographics_file=None):
+    """
+    Build the full (Patient ID, Pathway Name) universe for the output.
+
+    Digital patients come from content_file. When demographics_file is
+    provided, analog patients (present in demographics but absent from the
+    questionnaire file) are also included so they appear in the output with
+    blank questionnaire columns.
+    """
+    digital_base = build_content_base(content_file)
+
+    if demographics_file is None:
+        return digital_base
+
+    if isinstance(demographics_file, pd.DataFrame):
+        demo = clean_columns(demographics_file.copy())
+    else:
+        demo = read_demographics_file(demographics_file)
+
+    require_columns(demo, ["Patient ID"], "Enrichment file")
+
+    if "Pathway Name" in demo.columns:
+        demo_pairs = demo[["Patient ID", "Pathway Name"]].drop_duplicates()
+        merged = demo_pairs.merge(
+            digital_base[["Patient ID", "Pathway Name"]],
+            on=["Patient ID", "Pathway Name"],
+            how="left",
+            indicator=True,
+        )
+        analog = (
+            merged[merged["_merge"] == "left_only"][["Patient ID", "Pathway Name"]]
+            .reset_index(drop=True)
+        )
+    else:
+        digital_ids = set(digital_base["Patient ID"].astype(str))
+        analog_ids = (
+            demo[["Patient ID"]].drop_duplicates()
+            .loc[lambda df: ~df["Patient ID"].astype(str).isin(digital_ids)]
+            .reset_index(drop=True)
+        )
+        analog = analog_ids.copy()
+        analog["Pathway Name"] = pd.NA
+
+    if analog.empty:
+        return digital_base
+
+    return pd.concat([digital_base, analog], ignore_index=True).reset_index(drop=True)
+
+
 def build_answer_table(content_file, answers_file):
     base = build_content_base(content_file)
     answers = clean_columns(read_input_file(answers_file))

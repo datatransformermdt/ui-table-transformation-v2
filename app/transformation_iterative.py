@@ -1,7 +1,7 @@
 import pandas as pd
 from transformation_common import (
     build_answer_table,
-    build_content_base,
+    build_patient_base,
     merge_demographics,
     prepare_endpoint_file,
     reorder_transformed_columns,
@@ -129,7 +129,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     Non-iterative repeated answers are collapsed to the latest non-empty value.
     """
-    base = build_content_base(primary_file)
+    base = build_patient_base(primary_file, demographics_file)
     answers = build_answer_table(primary_file, secondary_file)
 
     # Remove rows with blank/missing questions so we don't generate "nan_" columns.
