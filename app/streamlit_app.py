@@ -511,6 +511,7 @@ if required_done:
                 )
 
             display_df = result_df.copy()
+            display_df.attrs = {}  # attrs must not contain DataFrames or pandas objects
             display_df = display_df.astype(object).where(result_df.notna(), "")
             display_df = display_df.astype(str)
 

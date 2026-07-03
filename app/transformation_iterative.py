@@ -171,7 +171,6 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
                 suffixes=("", "_endpoint"),
             )
         _validate_final_output(final, base)
-        final.attrs["blank_question_answers_report"] = blank_question_report
         final.attrs["transformation_report"] = build_transformation_report(final, digital_base)
         if output_file:
             final.to_csv(output_file, index=False, encoding="utf-8-sig")
@@ -249,7 +248,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     _validate_final_output(final, base)
 
     # Attach all attrs last so downstream merges cannot clear them.
-    final.attrs["blank_question_answers_report"] = blank_question_report
+    # Never store DataFrames in attrs — only plain Python types (str/int/list/dict).
     if conflicts:
         final.attrs["conflicts"] = [
             f"{conflict['Patient ID']}/{conflict['Pathway Name']}/{conflict['Question_Iteration']}: {conflict['values']}"
