@@ -11,22 +11,80 @@ DEBUG_ENDPOINT_MAPPING = os.getenv("DEBUG_ENDPOINT_MAPPING", "0").lower() not in
 # ---------------------------------------------------------------------------
 # Canonical question mapping
 # ---------------------------------------------------------------------------
-# Keys are the exact Question_Iteration (pivot column) strings that appear in
-# the output. Add new entries here whenever clinicians identify duplicate
-# columns — no other code needs to change.
-QUESTION_CANONICAL_MAP = {
-    "ERP Post-OP_Peri-operatives Flüssifkeitsmanagement beachtet":
-        "ERP Post-OP_Peri-operatives Flüssigkeitsmanagement beachtet",
-    "ERP Post-OP_Harnableitung (Katheter am 1. postoperativen Tag entfernt)":
-        "ERP Post-OP_Harnableitung (Katheter am 1. postoperativen Tag oder früher entfernt)",
-}
+_QUESTION_MAPPINGS_PATH = Path(__file__).parent / "question_mappings.csv"
 
 
-def apply_question_canonical_map(series):
-    """Replace known duplicate question column labels with their canonical form."""
-    if not QUESTION_CANONICAL_MAP:
+def load_question_canonical_map(config_path=None):
+    """Load question synonym mappings from question_mappings.csv.
+
+    The CSV must have columns 'from' and 'to'. An optional 'comment' column
+    is ignored. Keys and values are the exact Question_Iteration strings (pivot
+    column labels: ContentName_QuestionText). Returns {} if the file is absent.
+
+    To add new mappings: edit question_mappings.csv only — no code changes needed.
+    """
+    path = Path(config_path) if config_path else _QUESTION_MAPPINGS_PATH
+    if not path.exists():
+        print(f"[CANONICAL MAP] Mapping file not found: {path} — skipping.")
+        return {}
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig", dtype=str)
+        missing = [c for c in ("from", "to") if c not in df.columns]
+        if missing:
+            print(f"[CANONICAL MAP] Mapping file missing columns {missing}: {path}")
+            return {}
+        df = df.dropna(subset=["from", "to"])
+        result = dict(zip(df["from"].str.strip(), df["to"].str.strip()))
+        print(f"[CANONICAL MAP] Loaded {len(result)} mapping(s) from {path.name}.")
+        return result
+    except Exception as exc:
+        print(f"[CANONICAL MAP] Failed to load {path}: {exc}")
+        return {}
+
+
+def apply_question_canonical_map(series, config_path=None):
+    """Apply canonical question name mappings from question_mappings.csv.
+
+    Call this on the Question_Iteration (iterative) or _col_label (normal)
+    column AFTER question-text normalisation and BEFORE pivoting, so synonym
+    variants are folded into a single output column.
+
+    Prints: number of rows replaced, which mapping rules fired, and a warning
+    if any loaded rule produced no matches (possible stale entry).
+    Duplicate-column verification is handled by _validate_final_output.
+    """
+    canonical_map = load_question_canonical_map(config_path)
+    if not canonical_map:
         return series
-    return series.replace(QUESTION_CANONICAL_MAP)
+
+    original = series.copy()
+    mapped = series.replace(canonical_map)
+    changed_mask = original != mapped
+    n_changed = int(changed_mask.sum())
+
+    if n_changed:
+        fired = original[changed_mask].value_counts()
+        print(
+            f"[CANONICAL MAP] {n_changed} label(s) replaced "
+            f"({len(fired)} of {len(canonical_map)} rule(s) matched):"
+        )
+        for old_name, count in fired.items():
+            new_name = canonical_map.get(str(old_name), old_name)
+            print(f"  {count:4d}x  '{old_name}'")
+            print(f"        -> '{new_name}'")
+
+        unfired = set(canonical_map) - set(fired.index.astype(str))
+        if unfired:
+            print(f"[CANONICAL MAP] {len(unfired)} rule(s) loaded but not matched in this dataset:")
+            for key in sorted(unfired):
+                print(f"        '{key}'")
+    else:
+        print(
+            f"[CANONICAL MAP] 0 replacements "
+            f"({len(canonical_map)} rule(s) loaded, none matched this dataset)."
+        )
+
+    return mapped
 
 def _debug_endpoint_series(stage, col, series):
     print(f"DEBUG: {stage} - {col}")
