@@ -181,96 +181,119 @@ def build_content_base(content_file):
     return content[["Patient ID", "Pathway Name"]].drop_duplicates()
 
 
-def build_patient_base(content_file, demographics_file=None):
+def build_patient_base(content_file, demographics_file=None, answers_file=None):
     """
     Build the full (Patient ID, Pathway Name) universe for the output.
 
-    Base = UNION of unique (Patient ID, Pathway Name) from content_file
-    and unique (Patient ID, Pathway Name) from demographics_file.
-    Analog patients (in demographics but absent from content) appear in the
-    output with blank questionnaire columns.
+    Base = UNION of:
+      - content file  (questionnaire schedule / metadata)
+      - answers file  (primary source for questionnaire variables)
+      - demographics  (enrichment; source of truth for the patient population)
 
-    Questionnaire answers are always merged by the exact key
-    [Patient ID, Pathway Name] — never by Patient ID alone.
+    A patient that has answer records but no content record still gets
+    questionnaire columns populated in the output.
 
-    Returns (full_base, digital_base) where digital_base contains only the
-    rows originating from the questionnaire/content file.
+    Returns (full_base, content_base) where content_base contains only the
+    pairs that appear in the content/schedule file.
     """
-    digital_base = build_content_base(content_file)
+    content_base = build_content_base(content_file)
 
-    if demographics_file is None:
-        return digital_base, digital_base
-
-    if isinstance(demographics_file, pd.DataFrame):
-        demo = clean_columns(demographics_file.copy())
+    # Pairs from answers file
+    if answers_file is not None:
+        _ans_raw = clean_columns(read_input_file(answers_file))
+        if "Pathway Name" in _ans_raw.columns:
+            answers_pairs = _ans_raw[["Patient ID", "Pathway Name"]].drop_duplicates()
+        else:
+            answers_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
     else:
-        demo = read_demographics_file(demographics_file)
+        answers_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
 
-    require_columns(demo, ["Patient ID"], "Enrichment file")
-
-    if "Pathway Name" not in demo.columns:
-        return digital_base, digital_base
-
-    demo_pairs = demo[["Patient ID", "Pathway Name"]].drop_duplicates()
+    # Pairs from demographics file
+    if demographics_file is None:
+        demo_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
+    else:
+        if isinstance(demographics_file, pd.DataFrame):
+            demo = clean_columns(demographics_file.copy())
+        else:
+            demo = read_demographics_file(demographics_file)
+        require_columns(demo, ["Patient ID"], "Enrichment file")
+        if "Pathway Name" in demo.columns:
+            demo_pairs = demo[["Patient ID", "Pathway Name"]].drop_duplicates()
+        else:
+            demo_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
 
     full_base = (
-        pd.concat([digital_base, demo_pairs], ignore_index=True)
+        pd.concat([content_base, answers_pairs, demo_pairs], ignore_index=True)
         .drop_duplicates(subset=["Patient ID", "Pathway Name"])
         .reset_index(drop=True)
     )
-    return full_base, digital_base
+    return full_base, content_base
 
 
-def _compute_analog_answer_stats(final_before_demo, digital_base):
+def _compute_source_stats(final_before_demo, content_base):
     """
-    Check whether any analog patient rows unexpectedly contain questionnaire
-    answers before demographics/endpoints are merged in.
+    For every patient-pathway row in final_before_demo, classify it by source:
+      - content_only    : in content, no questionnaire answers
+      - content_answers : in content AND has >=1 answer
+      - answers_only    : has >=1 answer but NOT in content file
+      - no_data         : neither content nor answers (demographics-only)
 
-    Analog patients are those in final_before_demo but absent from digital_base.
-    Returns {"analog_with_answers": int, "analog_without_answers": int}.
+    Returns a dict with integer counts for each category.
+    Must be called before demographics/endpoints are merged in so that any
+    non-null value in a non-key column can only be a questionnaire answer.
     """
-    _check = final_before_demo[["Patient ID", "Pathway Name"]].merge(
-        digital_base[["Patient ID", "Pathway Name"]],
-        on=["Patient ID", "Pathway Name"],
+    keys = ["Patient ID", "Pathway Name"]
+    _check = final_before_demo[keys].merge(
+        content_base[keys],
+        on=keys,
         how="left",
         indicator=True,
     )
-    analog_mask = (_check["_merge"] == "left_only").values
-    n_analog = int(analog_mask.sum())
+    in_content = (_check["_merge"] == "both").values
 
-    if n_analog == 0:
-        return {"analog_with_answers": 0, "analog_without_answers": 0}
+    q_cols = [c for c in final_before_demo.columns if c not in keys]
+    if q_cols:
+        has_answer = final_before_demo[q_cols].notna().any(axis=1).values
+    else:
+        has_answer = pd.array([False] * len(final_before_demo))
 
-    q_cols = [c for c in final_before_demo.columns if c not in ["Patient ID", "Pathway Name"]]
-    if not q_cols:
-        return {"analog_with_answers": 0, "analog_without_answers": n_analog}
-
-    has_answer = final_before_demo.loc[analog_mask, q_cols].notna().any(axis=1)
     return {
-        "analog_with_answers": int(has_answer.sum()),
-        "analog_without_answers": int((~has_answer).sum()),
+        "content_with_answers":    int((in_content &  has_answer).sum()),
+        "content_without_answers": int((in_content & ~has_answer).sum()),
+        "answers_only":            int((~in_content &  has_answer).sum()),
+        "no_data":                 int((~in_content & ~has_answer).sum()),
     }
 
 
-def build_transformation_report(final, digital_base, analog_answer_stats=None):
+def build_transformation_report(final, content_base,
+                                 source_stats=None,
+                                 demographics_pairs=None,
+                                 answers_pairs=None):
     """
     Generate a validation and diagnostic report for the transformation output.
 
-    Returns a dict with:
-      - total_rows: total patient-pathway rows in the output
-      - digital_patient_pathways: rows originating from the questionnaire file
-      - analog_only_patient_pathways: rows from demographics only (no questionnaire data)
-      - duplicate_patient_pathways: duplicate (Patient ID, Pathway Name) pairs — should be 0
-      - missing_patient_id: rows with blank Patient ID
-      - missing_pathway_name: rows with blank Pathway Name
-      - analog_with_answers: analog patients that unexpectedly have >=1 questionnaire answer
-      - analog_without_answers: analog patients with entirely blank questionnaire columns
+    Printed and stored in final.attrs["transformation_report"].
+
+    Keys
+    ----
+    total_rows                  : rows in the final output
+    duplicate_patient_pathways  : should be 0
+    missing_patient_id          : rows where Patient ID is null
+    missing_pathway_name        : rows where Pathway Name is null
+    in_content                  : rows whose pair appears in the content file
+    in_answers_only             : rows with answers but no content record
+    demographics_only           : rows with no content and no answers
+    answers_without_content     : answer-file pairs absent from content file
+      (these now correctly produce questionnaire columns)
+    content_with_answers        : content patients that have questionnaire data
+    content_without_answers     : content patients with no answers at all
     """
+    keys = ["Patient ID", "Pathway Name"]
     report = {}
 
     report["total_rows"] = len(final)
     report["duplicate_patient_pathways"] = int(
-        final.duplicated(subset=["Patient ID", "Pathway Name"]).sum()
+        final.duplicated(subset=keys).sum()
     )
     report["missing_patient_id"] = (
         int(final["Patient ID"].isna().sum()) if "Patient ID" in final.columns else 0
@@ -279,29 +302,56 @@ def build_transformation_report(final, digital_base, analog_answer_stats=None):
         int(final["Pathway Name"].isna().sum()) if "Pathway Name" in final.columns else 0
     )
 
-    _check = final[["Patient ID", "Pathway Name"]].merge(
-        digital_base[["Patient ID", "Pathway Name"]],
-        on=["Patient ID", "Pathway Name"],
-        how="left",
-        indicator=True,
-    )
-    report["digital_patient_pathways"] = int((_check["_merge"] == "both").sum())
-    report["analog_only_patient_pathways"] = int((_check["_merge"] == "left_only").sum())
+    # Per-source breakdowns from final output
+    _chk = final[keys].merge(content_base[keys], on=keys, how="left", indicator=True)
+    report["in_content"]       = int((_chk["_merge"] == "both").sum())
+    report["not_in_content"]   = int((_chk["_merge"] == "left_only").sum())
 
-    if analog_answer_stats is not None:
-        report["analog_with_answers"] = analog_answer_stats.get("analog_with_answers", 0)
-        report["analog_without_answers"] = analog_answer_stats.get(
-            "analog_without_answers", report["analog_only_patient_pathways"]
-        )
+    # Source stats (computed before demo/endpoint merge)
+    if source_stats is not None:
+        report["content_with_answers"]    = source_stats.get("content_with_answers", 0)
+        report["content_without_answers"] = source_stats.get("content_without_answers", 0)
+        report["answers_only"]            = source_stats.get("answers_only", 0)
+        report["no_data"]                 = source_stats.get("no_data", 0)
     else:
-        report["analog_with_answers"] = 0
-        report["analog_without_answers"] = report["analog_only_patient_pathways"]
+        report["content_with_answers"]    = report["in_content"]
+        report["content_without_answers"] = 0
+        report["answers_only"]            = report["not_in_content"]
+        report["no_data"]                 = 0
+
+    # Optional cross-source counts
+    if answers_pairs is not None and not answers_pairs.empty:
+        _a = answers_pairs[keys].merge(content_base[keys], on=keys, how="left", indicator=True)
+        report["answers_without_content"] = int((_a["_merge"] == "left_only").sum())
+    else:
+        report["answers_without_content"] = 0
+
+    if demographics_pairs is not None:
+        report["demographics_patient_pathways"] = len(demographics_pairs)
+
+    # Print summary to console for traceability
+    print("\n[REPORT] Transformation summary")
+    print(f"  Total rows in output          : {report['total_rows']}")
+    print(f"  Duplicates (should be 0)      : {report['duplicate_patient_pathways']}")
+    print(f"  In content file               : {report['in_content']}")
+    print(f"  Answers-only (no content rec) : {report.get('answers_only', 'n/a')}")
+    print(f"    -> now populate questionnaire columns correctly")
+    print(f"  Demographics-only (no data)   : {report.get('no_data', 'n/a')}")
+    print(f"  Answer pairs without content  : {report['answers_without_content']}")
+    if "demographics_patient_pathways" in report:
+        print(f"  Demographics pairs            : {report['demographics_patient_pathways']}")
 
     return report
 
 
-def build_answer_table(content_file, answers_file):
-    base = build_content_base(content_file)
+def build_answer_table(answers_file):
+    """
+    Read and prepare the answers file.
+
+    The answers file is the PRIMARY source for questionnaire variables.
+    Content records are NOT required — a patient with answer rows but no
+    content record still receives questionnaire columns in the output.
+    """
     answers = clean_columns(read_input_file(answers_file))
 
     if "Input date" in answers.columns:
@@ -310,12 +360,6 @@ def build_answer_table(content_file, answers_file):
     normalize_datetime_column(answers, "Entry Date")
 
     require_columns(answers, ["Patient ID", "Pathway Name", "Content Name", "Question"], "Answers file")
-
-    answers = answers.merge(
-        base,
-        on=["Patient ID", "Pathway Name"],
-        how="inner"
-    )
 
     answers = _combine_answer_columns(answers)
     answers["Question_Normalized"] = answers["Question"].apply(normalize_question_text)
@@ -634,7 +678,11 @@ def build_merged_table(primary_file, secondary_file):
         right = _assign_answer_entry_dates_by_tolerance(left, right)
 
     merge_keys = ["Patient ID", "Pathway Name", "Content Name", "Entry Date"]
-    merged = pd.merge(left, right, on=merge_keys, how="left", suffixes=("", "_answer"))
+    # Outer join: content rows without answers keep NaN question columns;
+    # answer rows without a content record keep NaN Scheduled date.
+    # This ensures analog patients with answer records produce questionnaire
+    # columns even when their pathway/patient has no content file entry.
+    merged = pd.merge(left, right, on=merge_keys, how="outer", suffixes=("", "_answer"))
 
     keep_cols = [
         col for col in [

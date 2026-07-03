@@ -3,7 +3,7 @@ import pandas as pd
 from transformation_common import (
     build_answer_table,
     build_patient_base,
-    _compute_analog_answer_stats,
+    _compute_source_stats,
     build_transformation_report,
     merge_demographics,
     prepare_endpoint_file,
@@ -185,82 +185,57 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     Non-iterative repeated answers are collapsed to the latest non-empty value.
     """
-    # ── Diagnostic setup ────────────────────────────────────────────────────────
-    # Set DEBUG_ANALOG_PIPELINE=1 in the environment to enable step-by-step output.
-    analog_pairs = None  # populated below when debug is active
+    # base = union(content pairs, answers pairs, demographics pairs)
+    # content_base = pairs from the content/schedule file only
+    base, content_base = build_patient_base(
+        primary_file, demographics_file, answers_file=secondary_file
+    )
+
+    # answers is now built directly from the answers file — no content filter.
+    answers = build_answer_table(secondary_file)
+
     if _DEBUG_ANALOG:
-        _raw_content = clean_columns(read_input_file(primary_file))
         _raw_answers = clean_columns(read_input_file(secondary_file))
-        _content_pairs = _raw_content[["Patient ID", "Pathway Name"]].drop_duplicates()
-
-        if isinstance(demographics_file, pd.DataFrame):
-            _demo_raw = clean_columns(demographics_file.copy())
-        elif demographics_file is not None:
-            _demo_raw = clean_columns(read_input_file(demographics_file))
-        else:
-            _demo_raw = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
-
-        if "Pathway Name" in _demo_raw.columns:
-            _demo_pairs = _demo_raw[["Patient ID", "Pathway Name"]].drop_duplicates()
-            _chk = _demo_pairs.merge(_content_pairs, on=["Patient ID", "Pathway Name"],
-                                     how="left", indicator=True)
-            analog_pairs = _chk[_chk["_merge"] == "left_only"][["Patient ID", "Pathway Name"]].reset_index(drop=True)
-        else:
-            _demo_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
-            analog_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
-
+        _answers_pairs = _raw_answers[["Patient ID", "Pathway Name"]].drop_duplicates()
+        _not_in_content = _answers_pairs.merge(
+            content_base[["Patient ID", "Pathway Name"]],
+            on=["Patient ID", "Pathway Name"], how="left", indicator=True,
+        )
+        _answers_only = _not_in_content[_not_in_content["_merge"] == "left_only"][
+            ["Patient ID", "Pathway Name"]
+        ]
         print(f"\n{'='*72}")
-        print("[DIAG] ANALOG PIPELINE DIAGNOSTIC - iterative workflow")
+        print("[DIAG] ITERATIVE PIPELINE - source summary")
         print(f"{'='*72}")
-        print(f"  content unique pairs   : {len(_content_pairs)}")
-        print(f"  demographics pairs     : {len(_demo_pairs)}")
-        print(f"  analog pairs (demo only, not in content): {len(analog_pairs)}")
-        for _pw in sorted(analog_pairs["Pathway Name"].dropna().astype(str).unique()):
-            _n = (analog_pairs["Pathway Name"] == _pw).sum()
-            print(f"    '{_pw}'  ({_n} patients)")
+        print(f"  content pairs      : {len(content_base)}")
+        print(f"  answer pairs       : {len(_answers_pairs)}")
+        print(f"  answer-only pairs  : {len(_answers_only)} (no content record)")
+        print(f"  full base          : {len(base)}")
+        for _pw in sorted(_answers_only["Pathway Name"].dropna().astype(str).unique()):
+            _n = (_answers_only["Pathway Name"] == _pw).sum()
+            print(f"    answers-only pathway '{_pw}' ({_n} patients)")
+        _diag_answers("2. Answers file (no content filter)", answers, _answers_only)
 
-        # Stage 1: raw content
-        _diag_rows("1. Raw content file", _raw_content, analog_pairs)
-
-        # Stage 2: raw answers (before any filtering)
-        _diag_answers("2. Raw answers file (before any join/filter)", _raw_answers, analog_pairs)
-
-    base, digital_base = build_patient_base(primary_file, demographics_file)
-    answers = build_answer_table(primary_file, secondary_file)
-
-    if _DEBUG_ANALOG:
-        # Stage 3: after build_content_base (captured inside build_patient_base → digital_base)
-        _diag_rows("3. After build_content_base (digital_base)", digital_base, analog_pairs)
-        # Stage 4: after build_answer_table (inner-joined with content pairs)
-        _diag_answers("4. After build_answer_table (inner-joined with content)", answers, analog_pairs)
-
-    # Remove rows with blank/missing questions so we don't generate "nan_" columns.
-    # Keep a report of rows where Question is blank but an answer exists.
-    try:
-        import pandas as _pd
-    except Exception:
-        _pd = pd
-
-    # Normalize obvious string representations of missing values on the raw Question column
+    # Normalize blank/missing question values
     answers["Question"] = answers["Question"].replace(["nan", "NaN", ""], pd.NA)
 
-    # Report rows where Question is blank/missing but there is an answer present
     blank_q_mask = (
         answers["Question"].isna()
         | answers["Question"].astype(str).str.strip().eq("")
         | answers["Question"].astype(str).str.lower().eq("nan")
     )
 
+    # Track rows where Question is blank but an answer value exists
     report_mask = blank_q_mask & answers["Answer_Combined"].notna()
     blank_question_report = answers.loc[report_mask, [
         "Patient ID", "Pathway Name", "Content Name", "Entry Date", "Answer Text", "Answer Value"
     ]].copy()
 
-    # Now drop any rows where Question is blank or normalizes to 'nan'
     answers = answers[~blank_q_mask].copy()
 
     if _DEBUG_ANALOG:
-        _diag_answers("5. After blank-question filter", answers, analog_pairs)
+        _diag_answers("3. After blank-question filter", answers,
+                      _answers_only if _DEBUG_ANALOG else None)
 
     if answers.empty:
         final = base.copy()
@@ -274,19 +249,12 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
                 suffixes=("", "_endpoint"),
             )
         _validate_final_output(final, base)
-        final.attrs["transformation_report"] = build_transformation_report(final, digital_base)
+        final.attrs["transformation_report"] = build_transformation_report(
+            final, content_base
+        )
         if output_file:
             final.to_csv(output_file, index=False, encoding="utf-8-sig")
         return final
-
-    answers = answers.merge(
-        base[["Patient ID", "Pathway Name"]],
-        on=["Patient ID", "Pathway Name"],
-        how="inner",
-    )
-
-    if _DEBUG_ANALOG:
-        _diag_answers("6. After inner merge with base (full_base incl. analog)", answers, analog_pairs)
 
     answers["Is_Iterative_Content"] = answers["Content Name"].apply(_is_iterative_content_name)
     answers = answers.sort_values([
@@ -317,13 +285,15 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     )
 
     if _DEBUG_ANALOG:
-        _diag_answers("7. After Question_Iteration assignment (before collapse)", answers, analog_pairs)
+        _diag_answers("4. After Question_Iteration assignment (before collapse)", answers,
+                      _answers_only if _DEBUG_ANALOG else None)
 
     collapsed = _collapse_answer_groups(answers)
     conflicts = collapsed.attrs.get("conflicts", [])
 
     if _DEBUG_ANALOG:
-        _diag_answers("8. After _collapse_answer_groups", collapsed, analog_pairs)
+        _diag_answers("5. After _collapse_answer_groups", collapsed,
+                      _answers_only if _DEBUG_ANALOG else None)
 
     final = collapsed.pivot_table(
         index=["Patient ID", "Pathway Name"],
@@ -334,22 +304,28 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     final.columns.name = None
 
     if _DEBUG_ANALOG:
-        _diag_rows("9. After pivot (before merge with base)", final, analog_pairs)
+        _diag_rows("6. After pivot (before merge with base)", final,
+                   _answers_only if _DEBUG_ANALOG else None)
 
+    # Left merge: base provides one row per patient/pathway;
+    # pivot fills in questionnaire columns where answers exist.
     final = base.merge(final, on=["Patient ID", "Pathway Name"], how="left")
 
     if _DEBUG_ANALOG:
-        _diag_rows("10. After base.merge(pivot, how='left') - final patient-level output", final, analog_pairs)
-        q_cols = [c for c in final.columns if c not in ["Patient ID", "Pathway Name"]]
-        if analog_pairs is not None and not analog_pairs.empty and q_cols:
-            _ap_in_final = final.merge(analog_pairs, on=["Patient ID", "Pathway Name"], how="inner")
-            _has_data = _ap_in_final[q_cols].notna().any(axis=1).sum()
-            print(f"  analog patients with >=1 questionnaire value: {_has_data} / {len(_ap_in_final)}")
+        _diag_rows("7. After base.merge(pivot) - final output before demo/endpoints", final,
+                   _answers_only if _DEBUG_ANALOG else None)
+        _q_cols = [c for c in final.columns if c not in ["Patient ID", "Pathway Name"]]
+        if _q_cols and not _answers_only.empty:
+            _in_final = final.merge(_answers_only, on=["Patient ID", "Pathway Name"], how="inner")
+            _has_data = _in_final[_q_cols].notna().any(axis=1).sum()
+            print(f"  answers-only patients with >=1 questionnaire value: {_has_data} / {len(_in_final)}")
 
-    # Check for unexpected questionnaire answers on analog patients.
-    # Must run here, before demographics/endpoints are merged in, so that
-    # the only non-null columns can be questionnaire answers.
-    analog_answer_stats = _compute_analog_answer_stats(final, digital_base)
+    # Compute per-source stats before demographics/endpoints are merged in.
+    # At this point any non-null value in a non-key column is a questionnaire answer.
+    source_stats = _compute_source_stats(final, content_base)
+
+    # Collect pairs for the report
+    _ans_pairs = answers[["Patient ID", "Pathway Name"]].drop_duplicates()
 
     final = merge_demographics(final, demographics_file)
     if endpoint_file is not None:
@@ -363,22 +339,23 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     final = reorder_transformed_columns(final, demographics_file)
 
-    # Ensure we did not accidentally create any columns beginning with 'nan_'
-    nan_cols = [col for col in final.columns if isinstance(col, str) and col.lower().startswith("nan_")]
+    nan_cols = [c for c in final.columns if isinstance(c, str) and c.lower().startswith("nan_")]
     if nan_cols:
         raise ValueError(f"Final output contains invalid columns starting with 'nan_': {nan_cols}")
 
     _validate_final_output(final, base)
 
-    # Attach all attrs last so downstream merges cannot clear them.
-    # Never store DataFrames in attrs — only plain Python types (str/int/list/dict).
+    # Attach metadata last so merges above cannot clear attrs.
+    # Never store DataFrames in attrs — only plain Python types.
     if conflicts:
         final.attrs["conflicts"] = [
-            f"{conflict['Patient ID']}/{conflict['Pathway Name']}/{conflict['Question_Iteration']}: {conflict['values']}"
-            for conflict in conflicts
+            f"{c['Patient ID']}/{c['Pathway Name']}/{c['Question_Iteration']}: {c['values']}"
+            for c in conflicts
         ]
     final.attrs["transformation_report"] = build_transformation_report(
-        final, digital_base, analog_answer_stats
+        final, content_base,
+        source_stats=source_stats,
+        answers_pairs=_ans_pairs,
     )
 
     if output_file:
