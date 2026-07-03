@@ -476,6 +476,84 @@ def read_demographics_file(file):
     return demo
 
 
+# ---------------------------------------------------------------------------
+# Derived pathway variables
+# ---------------------------------------------------------------------------
+
+# Each tuple is (keyword_lowercase, output_label).
+# Both English and German spellings are listed so matching is language-agnostic.
+_PATH_RULES = [
+    ("colorectal",  "Colorectal"),   # English
+    ("kolorektal",  "Colorectal"),   # German
+    ("liver",       "Liver"),        # English
+    ("leber",       "Liver"),        # German
+    ("pancreas",    "Pancreas"),     # English
+    ("pankreas",    "Pancreas"),     # German
+]
+
+
+def derive_path(pathway_name):
+    """Map a Pathway Name to its surgical pathway label.
+
+    Matching is case-insensitive and keyword-based so it is robust to
+    version suffixes (V1, V2, Pre-final, analog, …).
+
+    Returns one of: 'Colorectal', 'Liver', 'Pancreas', or pd.NA.
+    Unknown values are returned as pd.NA; the caller should log them.
+    """
+    if pd.isna(pathway_name):
+        return pd.NA
+    name_lower = str(pathway_name).lower()
+    for keyword, label in _PATH_RULES:
+        if keyword in name_lower:
+            return label
+    return pd.NA
+
+
+def derive_app(pathway_name):
+    """Determine whether the pathway used the digital application.
+
+    Returns 'No' when the pathway name contains 'analog' (case-insensitive),
+    otherwise 'Yes'.
+    """
+    if pd.isna(pathway_name):
+        return pd.NA
+    if "analog" in str(pathway_name).lower():
+        return "No"
+    return "Yes"
+
+
+def _apply_pathway_derived_columns(final):
+    """Add Path and App columns derived from Pathway Name.
+
+    Prints a validation summary including any unknown pathway names
+    (those that could not be classified into a Path value).
+    Called by reorder_transformed_columns so both workflows pick it up
+    without any changes to the workflow files.
+    """
+    if "Pathway Name" not in final.columns:
+        return final
+
+    final = final.copy()
+    final["Path"] = final["Pathway Name"].map(derive_path)
+    final["App"]  = final["Pathway Name"].map(derive_app)
+
+    unknown_mask = final["Path"].isna() & final["Pathway Name"].notna()
+    unknown_names = sorted(final.loc[unknown_mask, "Pathway Name"].dropna().astype(str).unique())
+
+    print("\n[DERIVED] Pathway variable summary")
+    print(f"  Unique Path values : {sorted(final['Path'].dropna().astype(str).unique())}")
+    print(f"  Unique App values  : {sorted(final['App'].dropna().astype(str).unique())}")
+    if unknown_names:
+        print(f"  Unknown pathway names (Path = NA) — add a rule to derive_path():")
+        for name in unknown_names:
+            print(f"    - {name}")
+    else:
+        print("  All pathway names classified successfully.")
+
+    return final
+
+
 def _sort_question_column(col_with_index):
     """Sort key for ContentName_Iteration_Question (or ContentName_Question) format."""
     col, index = col_with_index
@@ -503,8 +581,13 @@ def _sort_question_columns(cols):
 
 
 def reorder_transformed_columns(final, demographics_file=None):
-    primary_id_cols = [col for col in ["Patient ID"] if col in final.columns]
-    path_cols       = [col for col in ["Pathway Name"] if col in final.columns]
+    # Derive Path and App from Pathway Name and add them to the DataFrame.
+    # This is the single call-site so both workflows pick it up automatically.
+    final = _apply_pathway_derived_columns(final)
+
+    primary_id_cols  = [col for col in ["Patient ID"] if col in final.columns]
+    pathway_cols     = [col for col in ["Pathway Name"] if col in final.columns]
+    derived_cols     = [col for col in ["Path", "App"] if col in final.columns]
 
     demo_cols = []
     if demographics_file is not None:
@@ -518,21 +601,24 @@ def reorder_transformed_columns(final, demographics_file=None):
     endpoint_cols = sorted(
         [col for col in final.columns if isinstance(col, str) and col.startswith("Endpoint_")]
     )
-    # Structural columns present only in the normal (non-iterative) workflow
     content_cols  = [col for col in ["Content Name"] if col in final.columns]
     date_cols     = [col for col in ["Scheduled date", "Entry Date"] if col in final.columns]
 
-    fixed = set(primary_id_cols + path_cols + demo_cols + endpoint_cols + content_cols + date_cols)
+    fixed = set(
+        primary_id_cols + pathway_cols + derived_cols
+        + demo_cols + endpoint_cols + content_cols + date_cols
+    )
     question_cols = [col for col in final.columns if col not in fixed]
 
     ordered_cols = (
-        primary_id_cols       # Patient ID
-        + path_cols           # Pathway Name
-        + demo_cols           # enrichment / demographics
-        + endpoint_cols       # Endpoint_* columns
-        + content_cols        # Content Name  (normal workflow only)
-        + date_cols           # Scheduled date, Entry Date  (normal workflow only)
-        + _sort_question_columns(question_cols)  # ContentName_[N_]Question, grouped by questionnaire
+        primary_id_cols                          # Patient ID
+        + pathway_cols                           # Pathway Name
+        + derived_cols                           # Path, App  (immediately after Pathway Name)
+        + demo_cols                              # enrichment / demographics
+        + endpoint_cols                          # Endpoint_* columns
+        + content_cols                           # Content Name  (normal workflow only)
+        + date_cols                              # Scheduled date, Entry Date  (normal workflow only)
+        + _sort_question_columns(question_cols)  # questionnaire columns
     )
     return final[ordered_cols]
 
