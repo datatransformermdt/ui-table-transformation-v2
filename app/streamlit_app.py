@@ -1,6 +1,7 @@
 import base64
 import io
 import importlib
+import traceback
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -486,7 +487,7 @@ if required_done:
                 demographics_arg = None
                 endpoint_df_arg  = None
                 extra_val = st.session_state.get("demographics_file")
-                extra_files = extra_val if isinstance(extra_val, list) else ([extra_val] if extra_val else [])
+                extra_files = extra_val if isinstance(extra_val, list) else ([extra_val] if extra_val is not None else [])
                 demo_dfs = []
                 for f in extra_files:
                     try:
@@ -563,6 +564,7 @@ if required_done:
                 f"Please check that you uploaded the correct files and try again.\n\n"
                 f"Technical detail: {e}"
             )
+            st.code(traceback.format_exc())
 else:
     st.button("▶  Generate transformed file", disabled=True)
     missing = []
