@@ -8,6 +8,26 @@ from pathlib import Path
 
 DEBUG_ENDPOINT_MAPPING = os.getenv("DEBUG_ENDPOINT_MAPPING", "0").lower() not in {"0", "false", "off"}
 
+# ---------------------------------------------------------------------------
+# Canonical question mapping
+# ---------------------------------------------------------------------------
+# Keys are the exact Question_Iteration (pivot column) strings that appear in
+# the output. Add new entries here whenever clinicians identify duplicate
+# columns — no other code needs to change.
+QUESTION_CANONICAL_MAP = {
+    "ERP Post-OP_Peri-operatives Flüssifkeitsmanagement beachtet":
+        "ERP Post-OP_Peri-operatives Flüssigkeitsmanagement beachtet",
+    "ERP Post-OP_Harnableitung (Katheter am 1. postoperativen Tag entfernt)":
+        "ERP Post-OP_Harnableitung (Katheter am 1. postoperativen Tag oder früher entfernt)",
+}
+
+
+def apply_question_canonical_map(series):
+    """Replace known duplicate question column labels with their canonical form."""
+    if not QUESTION_CANONICAL_MAP:
+        return series
+    return series.replace(QUESTION_CANONICAL_MAP)
+
 def _debug_endpoint_series(stage, col, series):
     print(f"DEBUG: {stage} - {col}")
     print(" dtype:", series.dtype)

@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from transformation_common import (
+    apply_question_canonical_map,
     build_merged_table,
     build_patient_base,
     _compute_source_stats,
@@ -43,6 +44,7 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
     if "Content_Name_Normalized" in df_pivot.columns:
         _q = "Question_Normalized" if "Question_Normalized" in df_pivot.columns else "Question"
         df_pivot["_col_label"] = df_pivot["Content_Name_Normalized"] + "_" + df_pivot[_q]
+        df_pivot["_col_label"] = apply_question_canonical_map(df_pivot["_col_label"])
         pivot_question_col = "_col_label"
     else:
         pivot_question_col = "Question_Normalized" if "Question_Normalized" in df_pivot.columns else "Question"

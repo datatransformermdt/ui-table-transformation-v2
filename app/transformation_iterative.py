@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from transformation_common import (
+    apply_question_canonical_map,
     build_answer_table,
     build_patient_base,
     _compute_source_stats,
@@ -283,6 +284,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         lambda row: _build_question_iteration_column(row, has_content_name),
         axis=1,
     )
+    answers["Question_Iteration"] = apply_question_canonical_map(answers["Question_Iteration"])
 
     if _DEBUG_ANALOG:
         _diag_answers("4. After Question_Iteration assignment (before collapse)", answers,
