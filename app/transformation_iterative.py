@@ -140,9 +140,18 @@ def _build_question_iteration_column(row, has_content_name):
 def _build_questionnaire_occurrence_validation(answers, final):
     source_pairs = answers[["Patient ID", "Pathway Name", "Content_Name_Normalized"]].copy()
     source_pairs = source_pairs.drop_duplicates()
+
+    # A "submission" is one distinct questionnaire fill-in event — i.e. one
+    # (Patient ID, Pathway Name, Content Name, Entry Date) — not one answer row.
+    # A 5-question questionnaire filled in 3 times produces 15 answer rows but
+    # only 3 submissions; counting rows here would flag every multi-question
+    # questionnaire as a false mismatch even though no data was lost. `answers`
+    # already carries one "Occurrence" number per submission event (shared
+    # across all of that event's questions), so counting distinct Occurrence
+    # values per questionnaire gives the true submission count.
     source_counts = (
-        answers.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)
-        .size()
+        answers.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)["Occurrence"]
+        .nunique()
         .reset_index(name="source_submissions")
     )
 
@@ -185,7 +194,7 @@ def _build_questionnaire_occurrence_validation(answers, final):
     return {
         "source_total_patients": int(source_pairs[["Patient ID", "Pathway Name"]].drop_duplicates().shape[0]),
         "output_total_patients": int(output_pairs.shape[0]),
-        "total_questionnaire_submissions_source": int(len(answers)),
+        "total_questionnaire_submissions_source": int(source_counts["source_submissions"].sum()),
         "total_questionnaire_occurrences_output": int(sum(occurrence_counts.values())),
         "mismatches": mismatch_rows,
     }
@@ -294,31 +303,37 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     answers["Is_Iterative_Content"] = answers["Content Name"].apply(
         lambda value: _is_iterative_content_name(value, iterative_content_names)
     )
-    answers = answers.sort_values([
-        "Patient ID",
-        "Pathway Name",
-        "Content Name",
-        "Question_Normalized",
-        "Entry Date",
-    ], na_position="last")
 
     has_content_name = "Content Name" in answers.columns
-    answers = answers.sort_values([
-        "Patient ID",
-        "Pathway Name",
-        "Content_Name_Normalized",
-        "Question_Normalized",
-        "Entry Date",
-    ], na_position="last")
-    answers["Occurrence"] = (
-        answers.groupby([
-            "Patient ID",
-            "Pathway Name",
-            "Content_Name_Normalized",
-            "Question_Normalized",
-        ], dropna=False, sort=False)
+
+    # Occurrence numbers are assigned per *submission event* — i.e. per distinct
+    # (Patient ID, Pathway Name, Content_Name_Normalized, Entry Date) — and then
+    # shared across every question that belongs to that event. This keeps all
+    # questions from the same questionnaire fill-in labeled with the same
+    # occurrence number even when a particular question was skipped on some
+    # occasions (assigning occurrence per-question independently would let
+    # "Occurrence 2" mean a different physical submission for different
+    # questions of the same questionnaire).
+    events = (
+        answers[["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"]]
+        .drop_duplicates()
+        .sort_values(
+            ["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"],
+            na_position="last",
+        )
+    )
+    events["Occurrence"] = (
+        events.groupby(
+            ["Patient ID", "Pathway Name", "Content_Name_Normalized"],
+            dropna=False, sort=False,
+        )
         .cumcount()
         + 1
+    )
+    answers = answers.merge(
+        events,
+        on=["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"],
+        how="left",
     )
     answers["Occurrence"] = answers["Occurrence"].astype(int)
 

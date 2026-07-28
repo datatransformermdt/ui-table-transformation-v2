@@ -128,6 +128,10 @@ class TransformationIterativeTest(unittest.TestCase):
                 {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Scheduled date': pd.NA, 'Input date': '2025-01-08'},
                 {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Scheduled date': pd.NA, 'Input date': '2025-01-15'},
             ])
+            # Three separate scheduled BMI submissions (one per week). Each entry
+            # date is its own submission event, so occurrence numbers must track
+            # the entry date — not the individual question — even though only one
+            # question happens to be answered on each date.
             answers = pd.DataFrame([
                 {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry Date': '2025-01-01', 'Question': 'BMI', 'Answer Text': pd.NA, 'Answer Value': '20'},
                 {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry Date': '2025-01-08', 'Question': 'Gewicht', 'Answer Text': pd.NA, 'Answer Value': '70'},
@@ -140,11 +144,49 @@ class TransformationIterativeTest(unittest.TestCase):
             result = ti.process_iterative_files(content_path, answers_path)
 
             self.assertIn('BMI_1_BMI', result.columns)
-            self.assertIn('BMI_1_Gewicht', result.columns)
-            self.assertIn('BMI_1_Größe (in Zentimetern)', result.columns)
+            self.assertIn('BMI_2_Gewicht', result.columns)
+            self.assertIn('BMI_3_Größe (in Zentimetern)', result.columns)
             self.assertEqual(result.loc[0, 'BMI_1_BMI'], 20)
-            self.assertEqual(result.loc[0, 'BMI_1_Gewicht'], 70)
-            self.assertEqual(result.loc[0, 'BMI_1_Größe (in Zentimetern)'], 175)
+            self.assertEqual(result.loc[0, 'BMI_2_Gewicht'], 70)
+            self.assertEqual(result.loc[0, 'BMI_3_Größe (in Zentimetern)'], 175)
+
+    def test_repeated_multi_question_submissions_share_occurrence_across_questions(self):
+        """A submission event (same Entry Date) must assign the SAME occurrence
+        number to every question it contains, even if some questions are only
+        present on some occasions. This is what the questionnaire_occurrence_validation
+        report relies on to correctly count submissions vs. answer rows."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Schmerztagebuch', 'Scheduled date': pd.NA, 'Input date': '2025-01-01'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Schmerztagebuch', 'Entry Date': '2025-01-01', 'Question': 'Pain level', 'Answer Text': pd.NA, 'Answer Value': 'P1'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Schmerztagebuch', 'Entry Date': '2025-01-01', 'Question': 'Pain location', 'Answer Text': pd.NA, 'Answer Value': 'L1'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Schmerztagebuch', 'Entry Date': '2025-01-02', 'Question': 'Pain level', 'Answer Text': pd.NA, 'Answer Value': 'P2'},
+                # 'Pain location' skipped on 2025-01-02 — should not shift its own occurrence numbering out of sync
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Schmerztagebuch', 'Entry Date': '2025-01-03', 'Question': 'Pain level', 'Answer Text': pd.NA, 'Answer Value': 'P3'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Schmerztagebuch', 'Entry Date': '2025-01-03', 'Question': 'Pain location', 'Answer Text': pd.NA, 'Answer Value': 'L3'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertEqual(result.loc[0, 'Schmerztagebuch_1_Pain level'], 'P1')
+            self.assertEqual(result.loc[0, 'Schmerztagebuch_1_Pain location'], 'L1')
+            self.assertEqual(result.loc[0, 'Schmerztagebuch_2_Pain level'], 'P2')
+            self.assertEqual(result.loc[0, 'Schmerztagebuch_3_Pain level'], 'P3')
+            self.assertEqual(result.loc[0, 'Schmerztagebuch_3_Pain location'], 'L3')
+            self.assertNotIn('Schmerztagebuch_2_Pain location', result.columns)
+
+            validation_report = result.attrs.get('questionnaire_occurrence_validation')
+            self.assertEqual(validation_report['total_questionnaire_submissions_source'], 3)
+            self.assertEqual(validation_report['total_questionnaire_occurrences_output'], 3)
+            self.assertEqual(validation_report['mismatches'], [])
 
     def test_iterative_preserves_rows_with_no_answers(self):
         with tempfile.TemporaryDirectory() as tmpdir:

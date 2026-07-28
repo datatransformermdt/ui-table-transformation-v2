@@ -528,6 +528,23 @@ if required_done:
                 unsafe_allow_html=True,
             )
 
+            # Repeated-questionnaire validation (iterative workflow only): confirms
+            # every submission in the Answers file made it into the flattened output.
+            occurrence_report = result_df.attrs.get("questionnaire_occurrence_validation")
+            if occurrence_report is not None:
+                mismatches = occurrence_report.get("mismatches", [])
+                st.markdown('<div class="section-label" style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;margin-top:20px;">Repeated-questionnaire validation</div>', unsafe_allow_html=True)
+                v1, v2, v3, v4 = st.columns(4)
+                v1.metric("Patients (source)", occurrence_report.get("source_total_patients", 0))
+                v2.metric("Patients (output)", occurrence_report.get("output_total_patients", 0))
+                v3.metric("Submissions (source)", occurrence_report.get("total_questionnaire_submissions_source", 0))
+                v4.metric("Occurrences (output)", occurrence_report.get("total_questionnaire_occurrences_output", 0))
+                if mismatches:
+                    st.warning(f"{len(mismatches)} patient/questionnaire combination(s) have a different number of occurrences in the output than submissions in the source. Review below.")
+                    st.dataframe(pd.DataFrame(mismatches), width='stretch')
+                else:
+                    st.success("Every questionnaire submission in the source file is represented in the output — no submissions were lost or overwritten.")
+
             st.markdown('<div class="section-label" style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">Preview — first rows of your output</div>', unsafe_allow_html=True)
             st.dataframe(display_df, width='stretch', height=380)
 
