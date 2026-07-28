@@ -189,9 +189,24 @@ def normalize_question_text(text):
 
 
 def normalize_content_name(text):
+    """Normalize Content Name the same way normalize_question_text() does
+    (minus the trailing-punctuation strip, which is question-specific).
+
+    Content Name comes from the same PDF/Excel-extraction pipeline as Question
+    text, so it is equally prone to invisible/zero-width characters and NFKC
+    variants (e.g. a soft hyphen mid-word). Content Name is now the grouping
+    key for occurrence numbering (see process_iterative_files), so if the
+    "same" real questionnaire is logged with inconsistent invisible characters
+    across submissions, each variant would silently start its own occurrence
+    count at 1 instead of being recognized as the same repeated questionnaire.
+    """
     if pd.isna(text):
         return text
-    return str(text).strip()
+    text = str(text).strip()
+    text = unicodedata.normalize("NFKC", text)
+    text = _INVISIBLE_CHARS.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def _strip_accents(text):

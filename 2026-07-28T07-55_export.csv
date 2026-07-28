@@ -1,0 +1,18 @@
+﻿,Patient ID,Pathway Name,Questionnaire,source_submissions,output_occurrences
+0,84009,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al pomeriggio?,1,0
+1,84009,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea alla sera?,2,0
+2,84009,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea durante la notte?,2,0
+3,88127,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al mattino?,4,3
+4,88354,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al mattino?,4,1
+5,88354,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al pomeriggio?,3,1
+6,88354,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea alla sera?,4,1
+7,88354,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea durante la notte?,1,0
+8,88973,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al mattino?,4,2
+9,88973,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al pomeriggio?,1,0
+10,88973,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea alla sera?,3,1
+11,88973,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea durante la notte?,3,1
+12,96146,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea alla sera?,7,1
+13,96146,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea durante la notte?,4,3
+14,113180,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea durante la notte?,5,4
+15,114125,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al mattino?,5,1
+16,114125,PERCORSO COLORETTALE,Come valuti il tuo dolore e la nausea al pomeriggio?,5,1

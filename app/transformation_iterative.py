@@ -1,5 +1,4 @@
 import os
-import re
 import pandas as pd
 from transformation_common import (
     apply_question_canonical_map,
@@ -156,46 +155,62 @@ def _build_questionnaire_occurrence_validation(answers, final):
     )
 
     output_pairs = final[["Patient ID", "Pathway Name"]].drop_duplicates()
-    occurrence_counts = {}
 
-    for row in final.itertuples(index=False):
-        patient_id = row[0]
-        pathway_name = row[1]
-        for col_idx, col in enumerate(final.columns):
-            if col in {"Patient ID", "Pathway Name"}:
-                continue
-            match = re.match(r"^(.*)_(\d+)_(.+)$", str(col))
-            if not match:
-                continue
-            content_name, occurrence, _ = match.groups()
-            value = row[col_idx]
-            if pd.isna(value):
-                continue
-            key = (patient_id, pathway_name, content_name)
-            occurrence_counts[key] = max(occurrence_counts.get(key, 0), int(occurrence))
-
-    mismatch_rows = []
-    for _, source_row in source_counts.iterrows():
-        key = (
-            source_row["Patient ID"],
-            source_row["Pathway Name"],
-            source_row["Content_Name_Normalized"],
+    # Determine which (Patient, Pathway, Question_Iteration) answers actually
+    # survived into a non-null cell of the pivoted output. This works directly
+    # off the Question_Iteration labels already assigned before the pivot,
+    # instead of re-parsing "Content_N_Question" column-name strings — that
+    # regex approach breaks silently whenever Content Name or Question text
+    # itself contains a "_<digits>_"-shaped substring (not unusual in real
+    # questionnaire text), which would misattribute or drop occurrences with
+    # no error. This version also catches genuine pivot collisions, where two
+    # different submissions were assigned the same Question_Iteration label
+    # and pivot_table's aggfunc="first" silently kept only one of them.
+    id_cols = ["Patient ID", "Pathway Name"]
+    q_iteration_cols = [
+        c for c in answers["Question_Iteration"].dropna().unique() if c in final.columns
+    ]
+    if q_iteration_cols:
+        melted = final[id_cols + q_iteration_cols].melt(
+            id_vars=id_cols, var_name="Question_Iteration", value_name="_output_value"
         )
-        output_count = occurrence_counts.get(key, 0)
-        if output_count != int(source_row["source_submissions"]):
-            mismatch_rows.append({
-                "Patient ID": source_row["Patient ID"],
-                "Pathway Name": source_row["Pathway Name"],
-                "Questionnaire": source_row["Content_Name_Normalized"],
-                "source_submissions": int(source_row["source_submissions"]),
-                "output_occurrences": output_count,
-            })
+        survived_cells = melted.loc[
+            melted["_output_value"].notna(), id_cols + ["Question_Iteration"]
+        ].drop_duplicates()
+        survived = answers.merge(survived_cells, on=id_cols + ["Question_Iteration"], how="inner")
+    else:
+        survived = answers.iloc[0:0]
+
+    occurrence_output_counts = (
+        survived.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)["Occurrence"]
+        .max()
+        .reset_index(name="output_occurrences")
+    )
+
+    comparison = source_counts.merge(
+        occurrence_output_counts,
+        on=["Patient ID", "Pathway Name", "Content_Name_Normalized"],
+        how="left",
+    )
+    comparison["output_occurrences"] = comparison["output_occurrences"].fillna(0).astype(int)
+
+    mismatch_mask = comparison["output_occurrences"] != comparison["source_submissions"]
+    mismatch_rows = [
+        {
+            "Patient ID": row["Patient ID"],
+            "Pathway Name": row["Pathway Name"],
+            "Questionnaire": row["Content_Name_Normalized"],
+            "source_submissions": int(row["source_submissions"]),
+            "output_occurrences": int(row["output_occurrences"]),
+        }
+        for _, row in comparison.loc[mismatch_mask].iterrows()
+    ]
 
     return {
         "source_total_patients": int(source_pairs[["Patient ID", "Pathway Name"]].drop_duplicates().shape[0]),
         "output_total_patients": int(output_pairs.shape[0]),
         "total_questionnaire_submissions_source": int(source_counts["source_submissions"].sum()),
-        "total_questionnaire_occurrences_output": int(sum(occurrence_counts.values())),
+        "total_questionnaire_occurrences_output": int(comparison["output_occurrences"].sum()),
         "mismatches": mismatch_rows,
     }
 
