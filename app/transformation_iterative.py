@@ -1,4 +1,5 @@
 import os
+import re
 import pandas as pd
 from transformation_common import (
     apply_question_canonical_map,
@@ -123,9 +124,9 @@ def sort_question_columns(cols):
 def _build_question_iteration_column(row, has_content_name):
     question = str(row["Question_Normalized"]).strip()
     content_name = str(row["Content_Name_Normalized"]).strip() if has_content_name else ""
-    iteration = str(int(row["Iteration"]))
+    iteration = str(int(row["Occurrence"]))
 
-    if row["Is_Iterative_Content"]:
+    if int(row["Occurrence"]) > 0:
         if has_content_name:
             return f"{content_name}_{iteration}_{question}"
         return f"{iteration}_{question}"
@@ -136,46 +137,58 @@ def _build_question_iteration_column(row, has_content_name):
     return question
 
 
-def _collapse_answer_groups(answers):
-    answers = answers.copy()
-    answers = answers.sort_values([
-        "Patient ID",
-        "Pathway Name",
-        "Content Name",
-        "Question_Normalized",
-        "Entry Date",
-    ], na_position="last")
+def _build_questionnaire_occurrence_validation(answers, final):
+    source_pairs = answers[["Patient ID", "Pathway Name", "Content_Name_Normalized"]].copy()
+    source_pairs = source_pairs.drop_duplicates()
+    source_counts = (
+        answers.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)
+        .size()
+        .reset_index(name="source_submissions")
+    )
 
-    collapsed_rows = []
-    conflicts = []
-    group_cols = ["Patient ID", "Pathway Name", "Question_Iteration"]
+    output_pairs = final[["Patient ID", "Pathway Name"]].drop_duplicates()
+    occurrence_counts = {}
 
-    for _, group in answers.groupby(group_cols, sort=False):
-        last_row = group.iloc[-1].copy()
-        non_null_answers = group["Answer_Combined"].dropna().astype(str)
+    for row in final.itertuples(index=False):
+        patient_id = row[0]
+        pathway_name = row[1]
+        for col_idx, col in enumerate(final.columns):
+            if col in {"Patient ID", "Pathway Name"}:
+                continue
+            match = re.match(r"^(.*)_(\d+)_(.+)$", str(col))
+            if not match:
+                continue
+            content_name, occurrence, _ = match.groups()
+            value = row[col_idx]
+            if pd.isna(value):
+                continue
+            key = (patient_id, pathway_name, content_name)
+            occurrence_counts[key] = max(occurrence_counts.get(key, 0), int(occurrence))
 
-        if not non_null_answers.empty:
-            if (
-                len(non_null_answers.unique()) > 1
-                and not group["Is_Iterative_Content"].iloc[0]
-            ):
-                conflicts.append({
-                    "Patient ID": last_row["Patient ID"],
-                    "Pathway Name": last_row["Pathway Name"],
-                    "Question_Iteration": last_row["Question_Iteration"],
-                    "values": non_null_answers.unique().tolist(),
-                })
-            last_row["Answer_Combined"] = non_null_answers.iloc[-1]
-        else:
-            last_row["Answer_Combined"] = pd.NA
+    mismatch_rows = []
+    for _, source_row in source_counts.iterrows():
+        key = (
+            source_row["Patient ID"],
+            source_row["Pathway Name"],
+            source_row["Content_Name_Normalized"],
+        )
+        output_count = occurrence_counts.get(key, 0)
+        if output_count != int(source_row["source_submissions"]):
+            mismatch_rows.append({
+                "Patient ID": source_row["Patient ID"],
+                "Pathway Name": source_row["Pathway Name"],
+                "Questionnaire": source_row["Content_Name_Normalized"],
+                "source_submissions": int(source_row["source_submissions"]),
+                "output_occurrences": output_count,
+            })
 
-        collapsed_rows.append(last_row)
-
-    collapsed = pd.DataFrame(collapsed_rows)
-    if not collapsed.empty:
-        collapsed = collapsed.reset_index(drop=True)
-    collapsed.attrs = {"conflicts": conflicts}
-    return collapsed
+    return {
+        "source_total_patients": int(source_pairs[["Patient ID", "Pathway Name"]].drop_duplicates().shape[0]),
+        "output_total_patients": int(output_pairs.shape[0]),
+        "total_questionnaire_submissions_source": int(len(answers)),
+        "total_questionnaire_occurrences_output": int(sum(occurrence_counts.values())),
+        "mismatches": mismatch_rows,
+    }
 
 
 def _validate_final_output(final, base):
@@ -289,19 +302,25 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         "Entry Date",
     ], na_position="last")
 
-    answers["Iteration"] = (
-        answers
-        .groupby([
+    has_content_name = "Content Name" in answers.columns
+    answers = answers.sort_values([
+        "Patient ID",
+        "Pathway Name",
+        "Content_Name_Normalized",
+        "Question_Normalized",
+        "Entry Date",
+    ], na_position="last")
+    answers["Occurrence"] = (
+        answers.groupby([
             "Patient ID",
             "Pathway Name",
-            "Content Name",
+            "Content_Name_Normalized",
             "Question_Normalized",
-        ], dropna=False)
+        ], dropna=False, sort=False)
         .cumcount()
         + 1
     )
-
-    has_content_name = "Content Name" in answers.columns
+    answers["Occurrence"] = answers["Occurrence"].astype(int)
 
     answers["Question_Iteration"] = answers.apply(
         lambda row: _build_question_iteration_column(row, has_content_name),
@@ -310,17 +329,10 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     answers["Question_Iteration"] = apply_question_canonical_map(answers["Question_Iteration"])
 
     if _DEBUG_ANALOG:
-        _diag_answers("4. After Question_Iteration assignment (before collapse)", answers,
+        _diag_answers("4. After Question_Iteration assignment (before pivot)", answers,
                       _answers_only if _DEBUG_ANALOG else None)
 
-    collapsed = _collapse_answer_groups(answers)
-    conflicts = collapsed.attrs.get("conflicts", [])
-
-    if _DEBUG_ANALOG:
-        _diag_answers("5. After _collapse_answer_groups", collapsed,
-                      _answers_only if _DEBUG_ANALOG else None)
-
-    final = collapsed.pivot_table(
+    final = answers.pivot_table(
         index=["Patient ID", "Pathway Name"],
         columns="Question_Iteration",
         values="Answer_Combined",
@@ -372,16 +384,14 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     # Attach metadata last so merges above cannot clear attrs.
     # Never store DataFrames in attrs — only plain Python types.
-    if conflicts:
-        final.attrs["conflicts"] = [
-            f"{c['Patient ID']}/{c['Pathway Name']}/{c['Question_Iteration']}: {c['values']}"
-            for c in conflicts
-        ]
+    validation_report = _build_questionnaire_occurrence_validation(answers, final)
+    final.attrs["questionnaire_occurrence_validation"] = validation_report
     final.attrs["transformation_report"] = build_transformation_report(
         final, content_base,
         source_stats=source_stats,
         answers_pairs=_ans_pairs,
     )
+    final.attrs["transformation_report"]["questionnaire_occurrence_validation"] = validation_report
 
     if output_file:
         final.to_csv(output_file, index=False, encoding="utf-8-sig")

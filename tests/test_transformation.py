@@ -11,6 +11,37 @@ import transformation_iterative as ti
 import transformation_normal as tn
 
 class TransformationIterativeTest(unittest.TestCase):
+    def test_repeated_questionnaire_submissions_are_preserved_as_occurrences(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Scheduled date': pd.NA, 'Input date': '2025-01-01'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-01', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-02', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'B'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-03', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'C'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertIn('Daily Diary_1_Mood', result.columns)
+            self.assertIn('Daily Diary_2_Mood', result.columns)
+            self.assertIn('Daily Diary_3_Mood', result.columns)
+            self.assertEqual(result.loc[0, 'Daily Diary_1_Mood'], 'A')
+            self.assertEqual(result.loc[0, 'Daily Diary_2_Mood'], 'B')
+            self.assertEqual(result.loc[0, 'Daily Diary_3_Mood'], 'C')
+
+            validation_report = result.attrs.get('questionnaire_occurrence_validation')
+            self.assertEqual(validation_report['total_questionnaire_submissions_source'], 3)
+            self.assertEqual(validation_report['total_questionnaire_occurrences_output'], 3)
+            self.assertEqual(validation_report['mismatches'], [])
+
     def test_non_iterative_questionnaire_collapses_to_single_column(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             content_path = os.path.join(tmpdir, 'content.csv')
@@ -34,10 +65,10 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = ti.process_iterative_files(content_path, answers_path)
 
-            self.assertIn('Q1_NonIterative', result.columns)
-            self.assertNotIn('Q1_NonIterative_1', result.columns)
-            self.assertIn('Q2_Allgemeine Gesundheit_1', result.columns)
-            self.assertIn('Q2_Allgemeine Gesundheit_2', result.columns)
+            self.assertIn('NonIterative_1_Q1', result.columns)
+            self.assertIn('NonIterative_2_Q1', result.columns)
+            self.assertIn('Allgemeine Gesundheit_1_Q2', result.columns)
+            self.assertIn('Allgemeine Gesundheit_2_Q2', result.columns)
             self.assertEqual(result.shape[0], 1)
 
     def test_iterative_question_variation_is_normalized(self):
@@ -59,9 +90,9 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = ti.process_iterative_files(content_path, answers_path)
 
-            self.assertIn('Q1_NonIterative', result.columns)
-            self.assertNotIn('Q1_NonIterative_1', result.columns)
-            self.assertNotIn('Q1_NonIterative_2', result.columns)
+            self.assertIn('NonIterative_1_Q1', result.columns)
+            self.assertIn('NonIterative_2_Q1', result.columns)
+            self.assertNotIn('NonIterative_1_Q1?', result.columns)
             self.assertNotIn('Q1?', result.columns)
 
     def test_question_colon_spacing_is_normalized(self):
@@ -82,8 +113,8 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = ti.process_iterative_files(content_path, answers_path)
 
-            normalized_col = 'Wenn Sie kohlenhydrathaltige Drinks im Rahmen der Sprechstunde von uns erhalten haben: Haben Sie die kohlenhydrathaltigen Drinks wie geplant zu sich genommen_Finale Vorbereitung'
-            raw_col = 'Wenn Sie kohlenhydrathaltige Drinks im Rahmen der Sprechstunde von uns erhalten haben:Haben Sie die kohlenhydrathaltigen Drinks wie geplant zu sich genommen_Finale Vorbereitung'
+            normalized_col = 'Finale Vorbereitung_1_Wenn Sie kohlenhydrathaltige Drinks im Rahmen der Sprechstunde von uns erhalten haben: Haben Sie die kohlenhydrathaltigen Drinks wie geplant zu sich genommen'
+            raw_col = 'Finale Vorbereitung_1_Wenn Sie kohlenhydrathaltige Drinks im Rahmen der Sprechstunde von uns erhalten haben:Haben Sie die kohlenhydrathaltigen Drinks wie geplant zu sich genommen'
             self.assertIn(normalized_col, result.columns)
             self.assertNotIn(raw_col, result.columns)
 
@@ -108,12 +139,12 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = ti.process_iterative_files(content_path, answers_path)
 
-            self.assertIn('BMI_BMI_1', result.columns)
-            self.assertIn('Gewicht_BMI_1', result.columns)
-            self.assertIn('Größe (in Zentimetern)_BMI_1', result.columns)
-            self.assertEqual(result.loc[0, 'BMI_BMI_1'], '20')
-            self.assertEqual(result.loc[0, 'Gewicht_BMI_1'], '70')
-            self.assertEqual(result.loc[0, 'Größe (in Zentimetern)_BMI_1'], '175')
+            self.assertIn('BMI_1_BMI', result.columns)
+            self.assertIn('BMI_1_Gewicht', result.columns)
+            self.assertIn('BMI_1_Größe (in Zentimetern)', result.columns)
+            self.assertEqual(result.loc[0, 'BMI_1_BMI'], 20)
+            self.assertEqual(result.loc[0, 'BMI_1_Gewicht'], 70)
+            self.assertEqual(result.loc[0, 'BMI_1_Größe (in Zentimetern)'], 175)
 
     def test_iterative_preserves_rows_with_no_answers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -153,8 +184,8 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = ti.process_iterative_files(content_path, answers_path)
 
-            self.assertIn('Q1_Allgemeine Gesundheit_1', result.columns)
-            self.assertEqual(result.loc[0, 'Q1_Allgemeine Gesundheit_1'], 'A')
+            self.assertIn('Allgemeine Gesundheit_1_Q1', result.columns)
+            self.assertEqual(result.loc[0, 'Allgemeine Gesundheit_1_Q1'], 'A')
 
     def test_weekly_movement_diary_is_iterative(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -175,10 +206,10 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = ti.process_iterative_files(content_path, answers_path)
 
-            self.assertIn('Q1_Wöchentliches Bewegungstagebuch_1', result.columns)
-            self.assertIn('Q1_Wöchentliches Bewegungstagebuch_2', result.columns)
-            self.assertEqual(result.loc[0, 'Q1_Wöchentliches Bewegungstagebuch_1'], 'A')
-            self.assertEqual(result.loc[0, 'Q1_Wöchentliches Bewegungstagebuch_2'], 'B')
+            self.assertIn('Wöchentliches Bewegungstagebuch_1_Q1', result.columns)
+            self.assertIn('Wöchentliches Bewegungstagebuch_2_Q1', result.columns)
+            self.assertEqual(result.loc[0, 'Wöchentliches Bewegungstagebuch_1_Q1'], 'A')
+            self.assertEqual(result.loc[0, 'Wöchentliches Bewegungstagebuch_2_Q1'], 'B')
 
     def test_custom_iterative_content_name_can_be_configured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -226,7 +257,7 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = tn.process_normal_files(content_path, answers_path)
 
-            self.assertIn('Q1', result.columns)
+            self.assertIn('NonIterative_Q1', result.columns)
             self.assertNotIn('Q1?', result.columns)
 
     def test_normal_preserves_rows_with_no_answers(self):
