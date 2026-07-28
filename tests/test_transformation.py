@@ -180,6 +180,34 @@ class TransformationIterativeTest(unittest.TestCase):
             self.assertEqual(result.loc[0, 'Q1_Wöchentliches Bewegungstagebuch_1'], 'A')
             self.assertEqual(result.loc[0, 'Q1_Wöchentliches Bewegungstagebuch_2'], 'B')
 
+    def test_custom_iterative_content_name_can_be_configured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'My Custom Diary', 'Scheduled date': pd.NA, 'Input date': '2025-01-01'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'My Custom Diary', 'Scheduled date': pd.NA, 'Input date': '2025-01-08'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'My Custom Diary', 'Entry Date': '2025-01-01', 'Question': 'Q1', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'My Custom Diary', 'Entry Date': '2025-01-08', 'Question': 'Q1', 'Answer Text': pd.NA, 'Answer Value': 'B'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(
+                content_path,
+                answers_path,
+                iterative_content_names=['custom diary'],
+            )
+
+            self.assertIn('My Custom Diary_1_Q1', result.columns)
+            self.assertIn('My Custom Diary_2_Q1', result.columns)
+            self.assertEqual(result.loc[0, 'My Custom Diary_1_Q1'], 'A')
+            self.assertEqual(result.loc[0, 'My Custom Diary_2_Q1'], 'B')
+
     def test_normal_question_variation_is_normalized(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             content_path = os.path.join(tmpdir, 'content.csv')

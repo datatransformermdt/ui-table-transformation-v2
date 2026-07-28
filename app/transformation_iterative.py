@@ -11,6 +11,7 @@ from transformation_common import (
     reorder_transformed_columns,
     read_input_file,
     clean_columns,
+    _strip_accents,
 )
 
 _DEBUG_ANALOG = os.getenv("DEBUG_ANALOG_PIPELINE", "0").lower() not in {"0", "false", "off"}
@@ -73,9 +74,29 @@ ITERATIVE_CONTENT_NAME_KEYWORDS = [
 ]
 
 
-def _is_iterative_content_name(content_name):
-    content_name = str(content_name or "").strip().lower()
-    return any(keyword.lower() in content_name for keyword in ITERATIVE_CONTENT_NAME_KEYWORDS)
+def _normalize_iterative_name(text):
+    if pd.isna(text):
+        return ""
+    return _strip_accents(str(text).strip().lower())
+
+
+def _is_iterative_content_name(content_name, iterative_content_names=None):
+    content_name = _normalize_iterative_name(content_name)
+    if not content_name:
+        return False
+
+    if iterative_content_names:
+        for candidate in iterative_content_names:
+            if pd.isna(candidate):
+                continue
+            normalized_candidate = _normalize_iterative_name(candidate)
+            if normalized_candidate and normalized_candidate in content_name:
+                return True
+
+    return any(
+        _normalize_iterative_name(keyword) in content_name
+        for keyword in ITERATIVE_CONTENT_NAME_KEYWORDS
+    )
 
 
 def sort_question_columns(cols):
@@ -177,7 +198,7 @@ def _validate_final_output(final, base):
         )
 
 
-def process_iterative_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None):
+def process_iterative_files(primary_file, secondary_file, demographics_file=None, endpoint_file=None, output_file=None, iterative_content_names=None):
     """
     Iterative questionnaire workflow.
 
@@ -257,7 +278,9 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
             final.to_csv(output_file, index=False, encoding="utf-8-sig")
         return final
 
-    answers["Is_Iterative_Content"] = answers["Content Name"].apply(_is_iterative_content_name)
+    answers["Is_Iterative_Content"] = answers["Content Name"].apply(
+        lambda value: _is_iterative_content_name(value, iterative_content_names)
+    )
     answers = answers.sort_values([
         "Patient ID",
         "Pathway Name",

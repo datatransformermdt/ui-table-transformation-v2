@@ -344,7 +344,8 @@ with tabs[4]:
                         answers_file,
                         scheduled_file,
                         demographics_file=demographics_file,
-                        workflow=workflow_mode
+                        workflow=workflow_mode,
+                        iterative_content_names=st.session_state.get("iterative_contents_selector", [])
                     )
                     
                     st.session_state.transformation_result = result_df
@@ -422,7 +423,7 @@ with tabs[5]:
                 )
 
 
-def process_files(answers_file, scheduled_file, demographics_file=None, workflow="normal"):
+def process_files(answers_file, scheduled_file, demographics_file=None, workflow="normal", iterative_content_names=None):
     """
     Process files using the appropriate workflow.
     
@@ -438,7 +439,8 @@ def process_files(answers_file, scheduled_file, demographics_file=None, workflow
         return process_iterative_files(
             answers_file,
             scheduled_file,
-            demographics_file=demographics_file
+            demographics_file=demographics_file,
+            iterative_content_names=iterative_content_names
         )
 
 

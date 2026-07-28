@@ -13,7 +13,8 @@ WORKFLOWS = ("normal", "iterative")
 
 
 def process_files(primary_file, secondary_file, workflow="normal",
-                  demographics_file=None, endpoint_file=None, output_file=None):
+                  demographics_file=None, endpoint_file=None, output_file=None,
+                  iterative_content_names=None):
     """
     Run the requested transformation workflow.
 
@@ -51,6 +52,7 @@ def process_files(primary_file, secondary_file, workflow="normal",
             demographics_file=demographics_file,
             endpoint_file=endpoint_file,
             output_file=output_file,
+            iterative_content_names=iterative_content_names,
         )
 
     raise ValueError(
