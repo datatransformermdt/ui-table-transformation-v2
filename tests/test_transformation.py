@@ -281,6 +281,46 @@ class TransformationIterativeTest(unittest.TestCase):
             self.assertEqual(result.loc[0, 'My Custom Diary_1_Q1'], 'A')
             self.assertEqual(result.loc[0, 'My Custom Diary_2_Q1'], 'B')
 
+    def test_iterative_adds_scheduled_date_per_occurrence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            # The schedule/content file logs "Input date" once a scheduled item
+            # is actually submitted — the same timestamp that shows up as
+            # "Entry Date" in the Answers file. That shared timestamp is what
+            # ties a "Scheduled date" to a specific occurrence.
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Scheduled date': '2025-01-01', 'Input date': '2025-01-01'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Scheduled date': '2025-01-07', 'Input date': '2025-01-02'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Scheduled date': '2025-01-14', 'Input date': pd.NA},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-01', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-02', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'B'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-03', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'C'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertIn('Daily Diary_1_Date', result.columns)
+            self.assertIn('Daily Diary_2_Date', result.columns)
+            self.assertIn('Daily Diary_3_Date', result.columns)
+            self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_1_Date']), pd.Timestamp('2025-01-01'))
+            self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_2_Date']), pd.Timestamp('2025-01-07'))
+            # Occurrence 3 (2025-01-03) has no matching schedule row, so its date is blank
+            self.assertTrue(pd.isna(result.loc[0, 'Daily Diary_3_Date']))
+
+            # Answers must still be fully preserved alongside the new date columns
+            self.assertEqual(result.loc[0, 'Daily Diary_1_Mood'], 'A')
+            self.assertEqual(result.loc[0, 'Daily Diary_2_Mood'], 'B')
+            self.assertEqual(result.loc[0, 'Daily Diary_3_Mood'], 'C')
+            validation_report = result.attrs.get('questionnaire_occurrence_validation')
+            self.assertEqual(validation_report['mismatches'], [])
+
     def test_normal_question_variation_is_normalized(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             content_path = os.path.join(tmpdir, 'content.csv')

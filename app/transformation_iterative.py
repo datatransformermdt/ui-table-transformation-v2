@@ -7,6 +7,8 @@ from transformation_common import (
     _compute_source_stats,
     build_transformation_report,
     merge_demographics,
+    normalize_content_name,
+    normalize_datetime_column,
     prepare_endpoint_file,
     reorder_transformed_columns,
     read_input_file,
@@ -134,6 +136,74 @@ def _build_question_iteration_column(row, has_content_name):
         return f"{content_name}_{question}"
 
     return question
+
+
+def _build_date_iteration_column(row, has_content_name):
+    content_name = str(row["Content_Name_Normalized"]).strip() if has_content_name else ""
+    iteration = str(int(row["Occurrence"]))
+
+    if has_content_name:
+        return f"{content_name}_{iteration}_Date"
+    return f"{iteration}_Date"
+
+
+def _attach_scheduled_dates(events, schedule_file, tolerance=pd.Timedelta(seconds=2)):
+    """Attach each occurrence's real-world "Scheduled date" by matching the
+    schedule/content file's Content Name + Input date to the occurrence's own
+    Content Name + Entry Date (nearest match within `tolerance`).
+
+    The schedule file logs one row per scheduled item, with "Input date" set
+    once the patient actually submits it — the same timestamp that ends up as
+    "Entry Date" in the Answers file. That shared timestamp is what lets us
+    look up which "Scheduled date" a given answered occurrence belongs to.
+    Occurrences with no matching schedule row (e.g. schedule file omitted, or
+    the content/date pair isn't present there) simply get a blank date.
+    """
+    events = events.copy()
+    events["Scheduled date"] = pd.NaT
+
+    try:
+        schedule = clean_columns(read_input_file(schedule_file))
+    except Exception:
+        return events
+
+    required = ["Patient ID", "Pathway Name", "Content Name", "Scheduled date", "Input date"]
+    if any(col not in schedule.columns for col in required):
+        return events
+
+    schedule = schedule.copy()
+    schedule["Content_Name_Normalized"] = schedule["Content Name"].apply(normalize_content_name)
+    normalize_datetime_column(schedule, "Input date")
+    normalize_datetime_column(schedule, "Scheduled date")
+    schedule = schedule.dropna(subset=["Input date"])
+    if schedule.empty:
+        return events
+
+    core_keys = ["Patient ID", "Pathway Name", "Content_Name_Normalized"]
+    schedule_slots = (
+        schedule[core_keys + ["Input date", "Scheduled date"]]
+        .rename(columns={"Scheduled date": "_Scheduled_date_candidate"})
+        .drop_duplicates()
+    )
+
+    events["_event_idx"] = events.index
+    candidates = events.merge(schedule_slots, on=core_keys, how="left")
+    candidates["_distance"] = (candidates["Entry Date"] - candidates["Input date"]).abs()
+    candidates = candidates[candidates["_distance"] <= tolerance]
+
+    if candidates.empty:
+        return events.drop(columns=["_event_idx"])
+
+    best = (
+        candidates.sort_values(["_event_idx", "_distance"])
+        .groupby("_event_idx", as_index=False)
+        .first()[["_event_idx", "_Scheduled_date_candidate"]]
+    )
+
+    events = events.merge(best, on="_event_idx", how="left")
+    events["Scheduled date"] = events["_Scheduled_date_candidate"].fillna(events["Scheduled date"])
+    events = events.drop(columns=["_event_idx", "_Scheduled_date_candidate"])
+    return events
 
 
 def _build_questionnaire_occurrence_validation(answers, final):
@@ -363,6 +433,24 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         dropna=False,
     ).reset_index()
     final.columns.name = None
+
+    # For each occurrence, add a "ContentName_N_Date" column carrying that
+    # occurrence's Scheduled date from the schedule/content file (matched via
+    # Content Name + nearest Input date to the occurrence's own Entry Date).
+    dated_events = _attach_scheduled_dates(events, primary_file)
+    dated_events["Date_Iteration"] = dated_events.apply(
+        lambda row: _build_date_iteration_column(row, has_content_name),
+        axis=1,
+    )
+    date_pivot = dated_events.pivot_table(
+        index=["Patient ID", "Pathway Name"],
+        columns="Date_Iteration",
+        values="Scheduled date",
+        aggfunc="first",
+        dropna=False,
+    ).reset_index()
+    date_pivot.columns.name = None
+    final = final.merge(date_pivot, on=["Patient ID", "Pathway Name"], how="left")
 
     if _DEBUG_ANALOG:
         _diag_rows("6. After pivot (before merge with base)", final,
