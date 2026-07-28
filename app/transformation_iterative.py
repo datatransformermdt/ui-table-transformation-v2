@@ -156,34 +156,27 @@ def _build_questionnaire_occurrence_validation(answers, final):
 
     output_pairs = final[["Patient ID", "Pathway Name"]].drop_duplicates()
 
-    # Determine which (Patient, Pathway, Question_Iteration) answers actually
-    # survived into a non-null cell of the pivoted output. This works directly
-    # off the Question_Iteration labels already assigned before the pivot,
-    # instead of re-parsing "Content_N_Question" column-name strings — that
-    # regex approach breaks silently whenever Content Name or Question text
-    # itself contains a "_<digits>_"-shaped substring (not unusual in real
-    # questionnaire text), which would misattribute or drop occurrences with
-    # no error. This version also catches genuine pivot collisions, where two
-    # different submissions were assigned the same Question_Iteration label
-    # and pivot_table's aggfunc="first" silently kept only one of them.
+    # An occurrence "made it into the output" if its Question_Iteration column
+    # exists in the pivoted table — NOT if that particular cell happens to be
+    # non-null. A submission where the patient left every field blank is still
+    # a real, correctly-preserved occurrence (there's simply nothing to show);
+    # treating a blank cell as "lost" would flag every legitimately-unanswered
+    # diary entry as a false mismatch. What we actually need to catch is
+    # STRUCTURAL loss: (a) the pivot's own `dropna` default silently removing a
+    # column whose values happen to be null for every patient who has it (now
+    # prevented via dropna=False on the pivot_table call above), and (b) a
+    # genuine collision — two different submissions assigned the exact same
+    # (Patient, Pathway, Question_Iteration) key, which pivot_table's
+    # aggfunc="first" would silently resolve by keeping only one.
     id_cols = ["Patient ID", "Pathway Name"]
-    q_iteration_cols = [
-        c for c in answers["Question_Iteration"].dropna().unique() if c in final.columns
-    ]
-    if q_iteration_cols:
-        melted = final[id_cols + q_iteration_cols].melt(
-            id_vars=id_cols, var_name="Question_Iteration", value_name="_output_value"
-        )
-        survived_cells = melted.loc[
-            melted["_output_value"].notna(), id_cols + ["Question_Iteration"]
-        ].drop_duplicates()
-        survived = answers.merge(survived_cells, on=id_cols + ["Question_Iteration"], how="inner")
-    else:
-        survived = answers.iloc[0:0]
+    existing_cols = set(final.columns)
+    col_exists = answers["Question_Iteration"].isin(existing_cols)
+    collision_rank = answers.groupby(id_cols + ["Question_Iteration"], dropna=False).cumcount()
+    represented = answers[col_exists & (collision_rank == 0)]
 
     occurrence_output_counts = (
-        survived.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)["Occurrence"]
-        .max()
+        represented.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)["Occurrence"]
+        .nunique()
         .reset_index(name="output_occurrences")
     )
 
@@ -367,6 +360,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         columns="Question_Iteration",
         values="Answer_Combined",
         aggfunc="first",
+        dropna=False,
     ).reset_index()
     final.columns.name = None
 
