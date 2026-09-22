@@ -452,6 +452,24 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     date_pivot.columns.name = None
     final = final.merge(date_pivot, on=["Patient ID", "Pathway Name"], how="left")
 
+    entry_date_events = events.copy()
+    entry_date_events["Date_Iteration"] = entry_date_events.apply(
+        lambda row: _build_date_iteration_column(row, has_content_name)
+        .replace("_Date", "_Entry_Date"),
+        axis=1,
+    )
+    entry_date_pivot = entry_date_events.pivot_table(
+        index=["Patient ID", "Pathway Name"],
+        columns="Date_Iteration",
+        values="Entry Date",
+        aggfunc="first",
+        dropna=False,
+    ).reset_index()
+    entry_date_pivot.columns.name = None
+    final = final.merge(
+        entry_date_pivot, on=["Patient ID", "Pathway Name"], how="left"
+    )
+
     if _DEBUG_ANALOG:
         _diag_rows("6. After pivot (before merge with base)", final,
                    _answers_only if _DEBUG_ANALOG else None)

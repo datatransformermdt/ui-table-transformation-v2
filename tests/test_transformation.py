@@ -309,10 +309,25 @@ class TransformationIterativeTest(unittest.TestCase):
             self.assertIn('Daily Diary_1_Date', result.columns)
             self.assertIn('Daily Diary_2_Date', result.columns)
             self.assertIn('Daily Diary_3_Date', result.columns)
+            self.assertIn('Daily Diary_1_Entry_Date', result.columns)
+            self.assertIn('Daily Diary_2_Entry_Date', result.columns)
+            self.assertIn('Daily Diary_3_Entry_Date', result.columns)
             self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_1_Date']), pd.Timestamp('2025-01-01'))
             self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_2_Date']), pd.Timestamp('2025-01-07'))
             # Occurrence 3 (2025-01-03) has no matching schedule row, so its date is blank
             self.assertTrue(pd.isna(result.loc[0, 'Daily Diary_3_Date']))
+            self.assertEqual(
+                pd.Timestamp(result.loc[0, 'Daily Diary_1_Entry_Date']),
+                pd.Timestamp('2025-01-01'),
+            )
+            self.assertEqual(
+                pd.Timestamp(result.loc[0, 'Daily Diary_2_Entry_Date']),
+                pd.Timestamp('2025-01-02'),
+            )
+            self.assertEqual(
+                pd.Timestamp(result.loc[0, 'Daily Diary_3_Entry_Date']),
+                pd.Timestamp('2025-01-03'),
+            )
 
             # Answers must still be fully preserved alongside the new date columns
             self.assertEqual(result.loc[0, 'Daily Diary_1_Mood'], 'A')
