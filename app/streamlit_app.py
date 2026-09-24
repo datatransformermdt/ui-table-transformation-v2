@@ -511,7 +511,7 @@ if required_done:
                     except Exception:
                         pass
                 if demo_dfs:
-                    demographics_arg = pd.concat(demo_dfs, ignore_index=True)
+                    demographics_arg = demo_dfs[0] if len(demo_dfs) == 1 else demo_dfs
 
                 secondary_val = st.session_state.get("secondary_file")
                 answer_files = secondary_val if isinstance(secondary_val, list) else ([secondary_val] if secondary_val is not None else [])

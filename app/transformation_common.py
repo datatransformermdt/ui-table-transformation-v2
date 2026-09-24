@@ -223,6 +223,69 @@ def clean_columns(df):
     return df
 
 
+def identity_columns(df):
+    columns = ["Patient ID"]
+    if "Pathway_ID" in df.columns:
+        columns.append("Pathway_ID")
+    if "Pathway Name" in df.columns:
+        columns.append("Pathway Name")
+    return columns
+
+
+def _resolve_pathway_ids(df, source_file):
+    """Resolve unkeyed rows from a source with pathway IDs before grouping."""
+    if "Pathway_ID" in df.columns:
+        return df
+
+    source = clean_columns(read_input_file(source_file))
+    if "Pathway_ID" not in source.columns:
+        return df
+
+    left = df.copy()
+    right = source.copy()
+    if "Input date" in right.columns and "Entry Date" not in right.columns:
+        right = right.rename(columns={"Input date": "Entry Date"})
+    normalize_datetime_column(left, "Entry Date")
+    normalize_datetime_column(right, "Entry Date")
+
+    match_columns = [
+        col for col in ["Patient ID", "Pathway Name", "Content Name", "Entry Date"]
+        if col in left.columns and col in right.columns
+    ]
+    if len(match_columns) < 2:
+        return left
+
+    candidates = right[match_columns + ["Pathway_ID"]].dropna(subset=["Pathway_ID"]).drop_duplicates()
+    if "Entry Date" in match_columns:
+        candidates = candidates.dropna(subset=["Entry Date"])
+    counts = candidates.groupby(match_columns, dropna=False)["Pathway_ID"].nunique()
+    ambiguous = counts[counts > 1]
+    if not ambiguous.empty:
+        raise ValueError(
+            "Cannot resolve Pathway_ID for ambiguous source keys "
+            f"{match_columns}: {len(ambiguous)} key(s)."
+        )
+    return left.merge(
+        candidates.drop_duplicates(match_columns),
+        on=match_columns,
+        how="left",
+        validate="many_to_one",
+    )
+
+
+def expand_pathway_ids(df, reference):
+    """Expand unkeyed questionnaire rows to the pathway base identities."""
+    if "Pathway_ID" in df.columns or "Pathway_ID" not in reference.columns:
+        return df
+    mapping = reference[["Patient ID", "Pathway Name", "Pathway_ID"]].drop_duplicates()
+    return df.merge(
+        mapping,
+        on=["Patient ID", "Pathway Name"],
+        how="left",
+        validate="many_to_many",
+    )
+
+
 def normalize_datetime_column(df, col_name):
     if col_name in df.columns:
         df[col_name] = normalize_datetime_series(df[col_name])
@@ -361,7 +424,7 @@ def _is_iterative_content_name(content_name):
 def build_content_base(content_file):
     content = clean_columns(read_input_file(content_file))
     require_columns(content, ["Patient ID", "Pathway Name"], "Content file")
-    return content[["Patient ID", "Pathway Name"]].drop_duplicates()
+    return content[identity_columns(content)].drop_duplicates()
 
 
 def attach_pathway_ids(df, content_file):
@@ -407,30 +470,48 @@ def build_patient_base(content_file, demographics_file=None, answers_file=None):
 
     # Pairs from answers file
     if answers_file is not None:
-        _ans_raw = clean_columns(read_input_file(answers_file))
+        _ans_raw = _resolve_pathway_ids(
+            clean_columns(read_input_file(answers_file)), content_file
+        )
         if "Pathway Name" in _ans_raw.columns:
-            answers_pairs = _ans_raw[["Patient ID", "Pathway Name"]].drop_duplicates()
+            answers_pairs = _ans_raw[identity_columns(_ans_raw)].drop_duplicates()
         else:
-            answers_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
+            answers_pairs = pd.DataFrame(columns=identity_columns(content_base))
     else:
-        answers_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
+        answers_pairs = pd.DataFrame(columns=identity_columns(content_base))
 
     # Pairs from every enrichment file. Enrichment inputs may have different
     # columns, so they are inspected independently rather than concatenated.
-    demo_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
+    demo_pairs = pd.DataFrame(columns=identity_columns(content_base))
     for index, demo in enumerate(_as_enrichment_frames(demographics_file), start=1):
         require_columns(demo, ["Patient ID"], f"Enrichment file {index}")
         if "Pathway Name" in demo.columns:
             demo_pairs = pd.concat(
-                [demo_pairs, demo[["Patient ID", "Pathway Name"]]],
+                [demo_pairs, demo[identity_columns(demo)]],
                 ignore_index=True,
             )
 
+    pair_frames = [content_base, answers_pairs, demo_pairs]
+    base_keys = ["Patient ID"]
+    if any("Pathway_ID" in frame.columns for frame in pair_frames):
+        base_keys.append("Pathway_ID")
+    if any("Pathway Name" in frame.columns for frame in pair_frames):
+        base_keys.append("Pathway Name")
     full_base = (
-        pd.concat([content_base, answers_pairs, demo_pairs], ignore_index=True)
-        .drop_duplicates(subset=["Patient ID", "Pathway Name"])
+        pd.concat([frame.reindex(columns=base_keys) for frame in pair_frames], ignore_index=True)
+        .drop_duplicates(subset=base_keys)
         .reset_index(drop=True)
     )
+    if "Pathway_ID" in base_keys:
+        keyed_pairs = full_base.loc[full_base["Pathway_ID"].notna(), ["Patient ID", "Pathway Name"]].drop_duplicates()
+        full_base = full_base.merge(
+            keyed_pairs.assign(_has_pathway_id=True),
+            on=["Patient ID", "Pathway Name"],
+            how="left",
+        )
+        full_base = full_base[
+            full_base["Pathway_ID"].notna() | full_base["_has_pathway_id"].isna()
+        ].drop(columns="_has_pathway_id")
     return full_base, content_base
 
 
@@ -446,7 +527,7 @@ def _compute_source_stats(final_before_demo, content_base):
     Must be called before demographics/endpoints are merged in so that any
     non-null value in a non-key column can only be a questionnaire answer.
     """
-    keys = ["Patient ID", "Pathway Name"]
+    keys = [column for column in identity_columns(final_before_demo) if column in content_base.columns]
     _check = final_before_demo[keys].merge(
         content_base[keys],
         on=keys,
@@ -492,7 +573,8 @@ def build_transformation_report(final, content_base,
     content_with_answers        : content patients that have questionnaire data
     content_without_answers     : content patients with no answers at all
     """
-    keys = ["Patient ID", "Pathway Name"]
+    keys = identity_columns(final)
+    content_keys = [column for column in keys if column in content_base.columns]
     report = {}
 
     report["total_rows"] = len(final)
@@ -507,7 +589,7 @@ def build_transformation_report(final, content_base,
     )
 
     # Per-source breakdowns from final output
-    _chk = final[keys].merge(content_base[keys], on=keys, how="left", indicator=True)
+    _chk = final[content_keys].merge(content_base[content_keys], on=content_keys, how="left", indicator=True)
     report["in_content"]       = int((_chk["_merge"] == "both").sum())
     report["not_in_content"]   = int((_chk["_merge"] == "left_only").sum())
 
@@ -525,7 +607,8 @@ def build_transformation_report(final, content_base,
 
     # Optional cross-source counts
     if answers_pairs is not None and not answers_pairs.empty:
-        _a = answers_pairs[keys].merge(content_base[keys], on=keys, how="left", indicator=True)
+        answer_keys = [column for column in keys if column in answers_pairs.columns and column in content_base.columns]
+        _a = answers_pairs[answer_keys].merge(content_base[answer_keys], on=answer_keys, how="left", indicator=True)
         report["answers_without_content"] = int((_a["_merge"] == "left_only").sum())
     else:
         report["answers_without_content"] = 0
@@ -548,7 +631,7 @@ def build_transformation_report(final, content_base,
     return report
 
 
-def build_answer_table(answers_file):
+def build_answer_table(answers_file, pathway_source_file=None):
     """
     Read and prepare the answers file.
 
@@ -562,6 +645,8 @@ def build_answer_table(answers_file):
         answers = answers.rename(columns={"Input date": "Entry Date"})
 
     normalize_datetime_column(answers, "Entry Date")
+    if pathway_source_file is not None:
+        answers = _resolve_pathway_ids(answers, pathway_source_file)
 
     require_columns(answers, ["Patient ID", "Pathway Name", "Content Name", "Question"], "Answers file")
 
@@ -585,10 +670,10 @@ def prepare_endpoint_file(endpoint_file):
         endpoints = clean_columns(read_input_file(endpoint_file))
     require_columns(endpoints, ["Patient ID", "Pathway Name"], "endpoint file")
 
-    duplicate_count = endpoints.duplicated(subset=["Patient ID", "Pathway Name"]).sum()
+    duplicate_count = endpoints.duplicated(subset=identity_columns(endpoints)).sum()
     if duplicate_count > 0:
         raise ValueError(
-            f"Endpoint file contains {duplicate_count} duplicate Patient ID + Pathway Name rows"
+            f"Endpoint file contains {duplicate_count} duplicate {identity_columns(endpoints)} rows"
         )
 
     if "Length of hospital stay" in endpoints.columns:
@@ -647,7 +732,7 @@ def prepare_endpoint_file(endpoint_file):
             for col in available_discharge_cols:
                 _debug_endpoint_series('after mapping', col, endpoints[col])
 
-    key_cols = ["Patient ID", "Pathway Name"]
+    key_cols = identity_columns(endpoints)
     rename_map = {}
     for col in endpoints.columns:
         if col not in key_cols and not col.startswith("Endpoint_"):
@@ -667,9 +752,7 @@ def read_demographics_file(file):
     demo = clean_columns(read_input_file(file))
     require_columns(demo, ["Patient ID"], "Enrichment file")
 
-    merge_keys = ["Patient ID"]
-    if "Pathway Name" in demo.columns:
-        merge_keys.append("Pathway Name")
+    merge_keys = identity_columns(demo)
 
     duplicate_count = demo.duplicated(subset=merge_keys).sum()
     if duplicate_count > 0:
@@ -1004,6 +1087,9 @@ def build_merged_table(primary_file, secondary_file):
     normalize_datetime_column(left, "Entry Date")
     normalize_datetime_column(right, "Entry Date")
 
+    if "Pathway_ID" not in right.columns:
+        right = _resolve_pathway_ids(right, left)
+
     required_left = ["Patient ID", "Pathway Name", "Content Name", "Entry Date"]
     required_right = ["Patient ID", "Pathway Name", "Content Name", "Entry Date", "Question"]
 
@@ -1018,6 +1104,8 @@ def build_merged_table(primary_file, secondary_file):
         right = _assign_answer_entry_dates_by_tolerance(left, right)
 
     merge_keys = ["Patient ID", "Pathway Name", "Content Name", "Entry Date"]
+    if "Pathway_ID" in left.columns and "Pathway_ID" in right.columns:
+        merge_keys.insert(1, "Pathway_ID")
     # Outer join: content rows without answers keep NaN question columns;
     # answer rows without a content record keep NaN Scheduled date.
     # This ensures analog patients with answer records produce questionnaire
@@ -1026,7 +1114,7 @@ def build_merged_table(primary_file, secondary_file):
 
     keep_cols = [
         col for col in [
-            "Patient ID", "Pathway Name", "Content Name",
+            "Patient ID", "Pathway_ID", "Pathway Name", "Content Name",
             "Scheduled date", "Entry Date",
             "Question", "Answer_Combined",
             "Question_Normalized", "Content_Name_Normalized",

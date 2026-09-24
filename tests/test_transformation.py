@@ -11,6 +11,32 @@ import transformation_iterative as ti
 import transformation_normal as tn
 
 class TransformationIterativeTest(unittest.TestCase):
+    def test_same_patient_name_preserves_distinct_pathway_ids(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            pd.DataFrame([
+                {'Patient ID': 7948, 'Pathway Name': 'P', 'Content Name': 'BMI',
+                 'Scheduled date': '2025-01-01', 'Input date': '2025-01-01'},
+            ]).to_csv(content_path, index=False)
+            pd.DataFrame([
+                {'Patient ID': 7948, 'Pathway Name': 'P', 'Content Name': 'BMI',
+                 'Entry Date': '2025-01-01', 'Question': 'BMI', 'Answer Value': 25},
+            ]).to_csv(answers_path, index=False)
+            demographics = pd.DataFrame([
+                {'Patient ID': 7948, 'Pathway Name': 'P', 'Pathway_ID': 73136},
+                {'Patient ID': 7948, 'Pathway Name': 'P', 'Pathway_ID': 76722},
+            ])
+
+            result = tn.process_normal_files(
+                content_path, answers_path, demographics_file=demographics
+            )
+
+            self.assertEqual(result['Pathway_ID'].tolist(), [73136, 76722])
+            self.assertEqual(result['Pathway_ID'].isna().sum(), 0)
+            self.assertEqual(result.duplicated(['Patient ID', 'Pathway_ID']).sum(), 0)
+
     def test_combined_answer_dataframes_are_supported_in_transformation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             content_path = os.path.join(tmpdir, 'content.csv')

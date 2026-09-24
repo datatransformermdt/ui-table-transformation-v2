@@ -14,6 +14,8 @@ from transformation_common import (
     reorder_transformed_columns,
     read_input_file,
     clean_columns,
+    identity_columns,
+    expand_pathway_ids,
     _strip_accents,
 )
 
@@ -181,6 +183,8 @@ def _attach_scheduled_dates(events, schedule_file, tolerance=pd.Timedelta(second
         return events
 
     core_keys = ["Patient ID", "Pathway Name", "Content_Name_Normalized"]
+    if "Pathway_ID" in events.columns and "Pathway_ID" in schedule.columns:
+        core_keys.insert(1, "Pathway_ID")
     schedule_slots = (
         schedule[core_keys + ["Input date", "Scheduled date"]]
         .rename(columns={"Scheduled date": "_Scheduled_date_candidate"})
@@ -237,14 +241,17 @@ def _add_missing_schedule_events(events, schedule_file):
     schedule = schedule[schedule["Content_Name_Normalized"].isin(selected_content_names)]
     if schedule.empty:
         return events
-    schedule_events = schedule[
-        ["Patient ID", "Pathway Name", "Content_Name_Normalized", "Input date"]
-    ].dropna(subset=["Input date"]).drop_duplicates()
+    schedule_event_cols = ["Patient ID", "Pathway Name", "Content_Name_Normalized", "Input date"]
+    if "Pathway_ID" in schedule.columns and "Pathway_ID" in events.columns:
+        schedule_event_cols.insert(1, "Pathway_ID")
+    schedule_events = schedule[schedule_event_cols].dropna(subset=["Input date"]).drop_duplicates()
 
     if schedule_events.empty:
         return events
 
     event_keys = ["Patient ID", "Pathway Name", "Content_Name_Normalized"]
+    if "Pathway_ID" in events.columns and "Pathway_ID" in schedule.columns:
+        event_keys.insert(1, "Pathway_ID")
     existing = events[event_keys + ["Entry Date"]].copy()
     existing["_entry_day"] = existing["Entry Date"].dt.normalize()
     schedule_events["_entry_day"] = schedule_events["Input date"].dt.normalize()
@@ -265,7 +272,8 @@ def _add_missing_schedule_events(events, schedule_file):
 
 
 def _build_questionnaire_occurrence_validation(answers, final):
-    source_pairs = answers[["Patient ID", "Pathway Name", "Content_Name_Normalized"]].copy()
+    identity_cols = identity_columns(answers)
+    source_pairs = answers[identity_cols + ["Content_Name_Normalized"]].copy()
     source_pairs = source_pairs.drop_duplicates()
 
     # A "submission" is one distinct questionnaire fill-in event — i.e. one
@@ -277,12 +285,12 @@ def _build_questionnaire_occurrence_validation(answers, final):
     # across all of that event's questions), so counting distinct Occurrence
     # values per questionnaire gives the true submission count.
     source_counts = (
-        answers.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)["Occurrence"]
+        answers.groupby(identity_cols + ["Content_Name_Normalized"], dropna=False)["Occurrence"]
         .nunique()
         .reset_index(name="source_submissions")
     )
 
-    output_pairs = final[["Patient ID", "Pathway Name"]].drop_duplicates()
+    output_pairs = final[identity_cols].drop_duplicates()
 
     # An occurrence "made it into the output" if its Question_Iteration column
     # exists in the pivoted table — NOT if that particular cell happens to be
@@ -296,21 +304,21 @@ def _build_questionnaire_occurrence_validation(answers, final):
     # genuine collision — two different submissions assigned the exact same
     # (Patient, Pathway, Question_Iteration) key, which pivot_table's
     # aggfunc="first" would silently resolve by keeping only one.
-    id_cols = ["Patient ID", "Pathway Name"]
+    id_cols = identity_cols
     existing_cols = set(final.columns)
     col_exists = answers["Question_Iteration"].isin(existing_cols)
     collision_rank = answers.groupby(id_cols + ["Question_Iteration"], dropna=False).cumcount()
     represented = answers[col_exists & (collision_rank == 0)]
 
     occurrence_output_counts = (
-        represented.groupby(["Patient ID", "Pathway Name", "Content_Name_Normalized"], dropna=False)["Occurrence"]
+        represented.groupby(identity_cols + ["Content_Name_Normalized"], dropna=False)["Occurrence"]
         .nunique()
         .reset_index(name="output_occurrences")
     )
 
     comparison = source_counts.merge(
         occurrence_output_counts,
-        on=["Patient ID", "Pathway Name", "Content_Name_Normalized"],
+        on=identity_cols + ["Content_Name_Normalized"],
         how="left",
     )
     comparison["output_occurrences"] = comparison["output_occurrences"].fillna(0).astype(int)
@@ -328,7 +336,7 @@ def _build_questionnaire_occurrence_validation(answers, final):
     ]
 
     return {
-        "source_total_patients": int(source_pairs[["Patient ID", "Pathway Name"]].drop_duplicates().shape[0]),
+        "source_total_patients": int(source_pairs[identity_cols].drop_duplicates().shape[0]),
         "output_total_patients": int(output_pairs.shape[0]),
         "total_questionnaire_submissions_source": int(source_counts["source_submissions"].sum()),
         "total_questionnaire_occurrences_output": int(comparison["output_occurrences"].sum()),
@@ -337,14 +345,17 @@ def _build_questionnaire_occurrence_validation(answers, final):
 
 
 def _validate_final_output(final, base):
-    expected_rows = len(base.drop_duplicates(subset=["Patient ID", "Pathway Name"]))
+    key_cols = identity_columns(base)
+    expected_rows = len(base.drop_duplicates(subset=key_cols))
     if final.shape[0] != expected_rows:
         raise ValueError(
             f"Final output row count {final.shape[0]} does not match expected base row count {expected_rows}."
         )
 
-    if final.duplicated(subset=["Patient ID", "Pathway Name"]).any():
-        raise ValueError("Final output contains duplicate Patient ID + Pathway Name rows.")
+    if final.duplicated(subset=key_cols).any():
+        raise ValueError(f"Final output contains duplicate {key_cols} rows.")
+    if "Pathway_ID" in key_cols and final["Pathway_ID"].isna().any():
+        raise ValueError("Final output contains rows with missing Pathway_ID.")
 
     if final.columns.duplicated().any():
         raise ValueError("Final output contains duplicate column names.")
@@ -372,7 +383,9 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     )
 
     # answers is now built directly from the answers file — no content filter.
-    answers = build_answer_table(secondary_file)
+    answers = build_answer_table(secondary_file, pathway_source_file=primary_file)
+    answers = expand_pathway_ids(answers, base)
+    id_cols = identity_columns(base)
 
     if _DEBUG_ANALOG:
         _raw_answers = clean_columns(read_input_file(secondary_file))
@@ -427,7 +440,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
             endpoints = prepare_endpoint_file(endpoint_file)
             final = final.merge(
                 endpoints,
-                on=["Patient ID", "Pathway Name"],
+                on=[key for key in identity_columns(final) if key in endpoints.columns],
                 how="left",
                 suffixes=("", "_endpoint"),
             )
@@ -454,16 +467,16 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     # "Occurrence 2" mean a different physical submission for different
     # questions of the same questionnaire).
     events = (
-        answers[["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"]]
+        answers[id_cols + ["Content_Name_Normalized", "Entry Date"]]
         .drop_duplicates()
         .sort_values(
-            ["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"],
+            id_cols + ["Content_Name_Normalized", "Entry Date"],
             na_position="last",
         )
     )
     events["Occurrence"] = (
         events.groupby(
-            ["Patient ID", "Pathway Name", "Content_Name_Normalized"],
+            id_cols + ["Content_Name_Normalized"],
             dropna=False, sort=False,
         )
         .cumcount()
@@ -471,12 +484,12 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     )
     events = _add_missing_schedule_events(events, primary_file)
     events = events.sort_values(
-        ["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"],
+            id_cols + ["Content_Name_Normalized", "Entry Date"],
         na_position="last",
     ).reset_index(drop=True)
     events["Occurrence"] = (
         events.groupby(
-            ["Patient ID", "Pathway Name", "Content_Name_Normalized"],
+            id_cols + ["Content_Name_Normalized"],
             dropna=False, sort=False,
         )
         .cumcount()
@@ -484,7 +497,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     )
     answers = answers.merge(
         events,
-        on=["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"],
+        on=id_cols + ["Content_Name_Normalized", "Entry Date"],
         how="left",
     )
     answers["Occurrence"] = answers["Occurrence"].astype(int)
@@ -501,14 +514,14 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     answer_values = (
         answers.groupby(
-            ["Patient ID", "Pathway Name", "Question_Iteration"],
+            id_cols + ["Question_Iteration"],
             dropna=False,
             as_index=False,
         )["Answer_Combined"]
         .first()
     )
     final = answer_values.pivot(
-        index=["Patient ID", "Pathway Name"],
+        index=id_cols,
         columns="Question_Iteration",
         values="Answer_Combined",
     ).reset_index()
@@ -523,12 +536,12 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         axis=1,
     )
     date_pivot = dated_events.pivot(
-        index=["Patient ID", "Pathway Name"],
+        index=id_cols,
         columns="Date_Iteration",
         values="Scheduled date",
     ).reset_index()
     date_pivot.columns.name = None
-    final = final.merge(date_pivot, on=["Patient ID", "Pathway Name"], how="outer")
+    final = final.merge(date_pivot, on=id_cols, how="outer")
 
     entry_date_events = events.copy()
     entry_date_events["Date_Iteration"] = entry_date_events.apply(
@@ -536,13 +549,13 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         axis=1,
     )
     entry_date_pivot = entry_date_events.pivot(
-        index=["Patient ID", "Pathway Name"],
+        index=id_cols,
         columns="Date_Iteration",
         values="Entry Date",
     ).reset_index()
     entry_date_pivot.columns.name = None
     final = final.merge(
-        entry_date_pivot, on=["Patient ID", "Pathway Name"], how="outer"
+        entry_date_pivot, on=id_cols, how="outer"
     )
 
     if _DEBUG_ANALOG:
@@ -551,7 +564,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     # Left merge: base provides one row per patient/pathway;
     # pivot fills in questionnaire columns where answers exist.
-    final = base.merge(final, on=["Patient ID", "Pathway Name"], how="left")
+    final = base.merge(final, on=id_cols, how="left")
 
     if _DEBUG_ANALOG:
         _diag_rows("7. After base.merge(pivot) - final output before demo/endpoints", final,
@@ -575,7 +588,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         endpoints = prepare_endpoint_file(endpoint_file)
         final = final.merge(
             endpoints,
-            on=["Patient ID", "Pathway Name"],
+            on=[key for key in identity_columns(final) if key in endpoints.columns],
             how="left",
             suffixes=("", "_endpoint"),
         )

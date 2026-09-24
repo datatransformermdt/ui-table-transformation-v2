@@ -10,6 +10,8 @@ from transformation_common import (
     merge_demographics,
     prepare_endpoint_file,
     reorder_transformed_columns,
+    identity_columns,
+    expand_pathway_ids,
 )
 
 
@@ -27,7 +29,13 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
     # build_merged_table uses an outer join so answer-only rows are preserved.
     df = build_merged_table(primary_file, secondary_file)
 
-    id_cols   = [col for col in ["Patient ID", "Pathway Name", "Content Name"] if col in df.columns]
+    full_base, content_base = build_patient_base(
+        primary_file, demographics_file, answers_file=secondary_file
+    )
+    df = expand_pathway_ids(df, full_base)
+
+    identity_cols = identity_columns(df)
+    id_cols   = identity_cols + [col for col in ["Content Name"] if col in df.columns]
     date_cols = [col for col in ["Scheduled date", "Entry Date"] if col in df.columns]
 
     # pivot_table silently drops rows where any index value is NaN/NaT.
@@ -74,18 +82,14 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
     # Build the full patient-pathway universe from content + answers + demographics.
     # Any patient-pathway in demographics or answers but absent from the pivot
     # (e.g. truly data-sparse patients) gets one blank row added below.
-    full_base, content_base = build_patient_base(
-        primary_file, demographics_file, answers_file=secondary_file
-    )
-
     # Patients already in the pivot (from content or answers records)
-    pivot_pairs = final[["Patient ID", "Pathway Name"]].drop_duplicates()
+    pivot_pairs = final[identity_cols].drop_duplicates()
     missing_pairs = full_base.merge(
-        pivot_pairs, on=["Patient ID", "Pathway Name"], how="left", indicator=True
+        pivot_pairs, on=identity_cols, how="left", indicator=True
     )
     missing_pairs = (
         missing_pairs[missing_pairs["_merge"] == "left_only"]
-        [["Patient ID", "Pathway Name"]]
+        [identity_cols]
         .reset_index(drop=True)
     )
 
@@ -98,7 +102,7 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
 
     # Collect source stats before demographics/endpoints are merged in.
     source_stats = _compute_source_stats(final, content_base)
-    _ans_pairs = df[["Patient ID", "Pathway Name"]].drop_duplicates()
+    _ans_pairs = df[identity_cols].drop_duplicates()
 
     final = attach_pathway_ids(final, primary_file)
     final = merge_demographics(final, demographics_file)
@@ -109,12 +113,21 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
         endpoints = prepare_endpoint_file(endpoint_file)
         final = final.merge(
             endpoints,
-            on=["Patient ID", "Pathway Name"],
+            on=[key for key in identity_columns(final) if key in endpoints.columns],
             how="left",
             suffixes=("", "_endpoint"),
         )
 
     final = reorder_transformed_columns(final, demographics_file)
+
+    output_keys = identity_columns(final) + [
+        col for col in ["Content Name", "Scheduled date", "Entry Date"]
+        if col in final.columns
+    ]
+    if final.duplicated(output_keys).any():
+        raise ValueError(f"Final output contains duplicate {output_keys} rows.")
+    if "Pathway_ID" in identity_columns(final) and final["Pathway_ID"].isna().any():
+        raise ValueError("Final output contains rows with missing Pathway_ID.")
 
     # Attach metadata last so merges above cannot clear attrs.
     final.attrs["transformation_report"] = build_transformation_report(
