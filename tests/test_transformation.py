@@ -11,6 +11,89 @@ import transformation_iterative as ti
 import transformation_normal as tn
 
 class TransformationIterativeTest(unittest.TestCase):
+    def test_combined_answer_dataframes_are_supported_in_transformation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Scheduled date': pd.NA, 'Input date': '2025-01-01'},
+            ])
+            content.to_csv(content_path, index=False)
+
+            answers_a = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-01', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+            ])
+            answers_b = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-02', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'B'},
+            ])
+            combined_answers = pd.concat([answers_a, answers_b], ignore_index=True)
+
+            result = tn.process_normal_files(content_path, combined_answers)
+
+            self.assertIn('Daily Diary_Mood', result.columns)
+            self.assertEqual(result['Daily Diary_Mood'].dropna().tolist(), ['A', 'B'])
+
+    def test_derived_path_and_app_columns_are_removed_when_not_analog_or_not_complete(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'Colorectal-Standard', 'Content Name': 'Daily Diary', 'Scheduled date': pd.NA, 'Input date': '2025-01-01'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'Colorectal-Standard', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-01', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+            self.assertNotIn('Path', result.columns)
+            self.assertNotIn('App', result.columns)
+
+    def test_derived_path_and_app_columns_are_kept_for_analog_pathways(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'Colorectal analog', 'Content Name': 'Daily Diary', 'Scheduled date': pd.NA, 'Input date': '2025-01-01'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'Colorectal analog', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-01', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+            self.assertIn('Path', result.columns)
+            self.assertIn('App', result.columns)
+            self.assertEqual(result['App'].tolist(), ['No'])
+
+    def test_iterative_output_places_schedule_and_entry_date_before_questions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            content = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Scheduled date': '2025-01-01', 'Input date': '2025-01-01'},
+            ])
+            answers = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-01', 'Question': 'Mood', 'Answer Text': pd.NA, 'Answer Value': 'A'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Daily Diary', 'Entry Date': '2025-01-01', 'Question': 'Sleep', 'Answer Text': pd.NA, 'Answer Value': 'B'},
+            ])
+
+            content.to_csv(content_path, index=False)
+            answers.to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+            expected_prefix = ['Patient ID', 'Pathway Name', 'Daily Diary_1_Scheduled date', 'Daily Diary_1_Entry Date']
+            self.assertEqual(list(result.columns[:4]), expected_prefix)
+            self.assertTrue(list(result.columns).index('Daily Diary_1_Scheduled date') < list(result.columns).index('Daily Diary_1_Mood'))
+            self.assertTrue(list(result.columns).index('Daily Diary_1_Entry Date') < list(result.columns).index('Daily Diary_1_Mood'))
+
     def test_repeated_questionnaire_submissions_are_preserved_as_occurrences(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             content_path = os.path.join(tmpdir, 'content.csv')
@@ -150,6 +233,185 @@ class TransformationIterativeTest(unittest.TestCase):
             self.assertEqual(result.loc[0, 'BMI_2_Gewicht'], 70)
             self.assertEqual(result.loc[0, 'BMI_3_Größe (in Zentimetern)'], 175)
 
+    def test_case_insensitive_date_headers_are_supported(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Scheduled Date': '2025-01-01', 'Input Date': '2025-01-01'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Scheduled Date': '2025-01-08', 'Input Date': '2025-01-08'},
+            ]).to_csv(content_path, index=False)
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry date': '2025-01-01', 'Question': 'BMI', 'Answer Value': '20'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry date': '2025-01-08', 'Question': 'Gewicht', 'Answer Value': '70'},
+            ]).to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertIn('BMI_1_Scheduled date', result.columns)
+            self.assertIn('BMI_1_Entry Date', result.columns)
+            self.assertEqual(result.loc[0, 'BMI_1_BMI'], 20)
+            self.assertEqual(result.loc[0, 'BMI_2_Gewicht'], 70)
+
+    def test_schedule_date_matches_when_input_times_differ_on_same_day(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Scheduled date': '2026-09-22', 'Input date': '2026-09-22 00:00'},
+            ]).to_csv(content_path, index=False)
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry Date': '2026-09-22 19:20', 'Question': 'BMI', 'Answer Text': '', 'Answer Value': '28.6'},
+            ]).to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertEqual(
+                result.loc[0, 'BMI_1_Scheduled date'],
+                pd.Timestamp('2026-09-22'),
+            )
+            self.assertEqual(result.loc[0, 'BMI_1_BMI'], 28.6)
+
+    def test_submitted_schedule_event_is_kept_without_answer_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            pd.DataFrame([
+                {'Patient ID': 22948, 'Pathway Name': 'ZH Geel - Zorgtraject Bariatrie', 'Content Name': 'BMI', 'Scheduled date': '2025-06-13', 'Input date': '2025-07-04 03:51'},
+            ]).to_csv(content_path, index=False)
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry Date': '2025-01-01', 'Question': 'BMI', 'Answer Text': '', 'Answer Value': '20'},
+            ]).to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            patient_row = result[result['Patient ID'] == 22948].iloc[0]
+            self.assertEqual(patient_row['BMI_1_Scheduled date'], pd.Timestamp('2025-06-13'))
+            self.assertEqual(patient_row['BMI_1_Entry Date'], pd.Timestamp('2025-07-04'))
+
+    def test_schedule_enrichment_is_limited_to_answer_questionnaires(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Scheduled date': '2025-01-01', 'Input date': '2025-01-01'},
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'Pain diary', 'Scheduled date': '2025-01-02', 'Input date': '2025-01-02'},
+            ]).to_csv(content_path, index=False)
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry Date': '2025-01-01', 'Question': 'BMI', 'Answer Text': '', 'Answer Value': '25'},
+            ]).to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertIn('BMI_1_BMI', result.columns)
+            self.assertNotIn('Pain diary_1_Scheduled date', result.columns)
+            self.assertNotIn('Pain diary_1_Entry Date', result.columns)
+
+    def test_multiple_generic_enrichment_tables_merge_horizontally(self):
+        base = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway Name': 'P', 'Questionnaire value': 'A'},
+        ])
+        adherence = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway Name': 'P', 'Adherence rate': 0.8},
+        ])
+        clinical = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway Name': 'P', 'Patient Age': 54, 'Risk group': 'low'},
+        ])
+
+        result = tc.merge_demographics(base, [adherence, clinical])
+
+        self.assertEqual(result.loc[0, 'Adherence rate'], 0.8)
+        self.assertEqual(result.loc[0, 'Patient Age'], 54)
+        self.assertEqual(result.loc[0, 'Risk group'], 'low')
+        self.assertEqual(len(result), 1)
+
+    def test_conflicting_duplicate_enrichment_rows_still_fail(self):
+        base = pd.DataFrame([{'Patient ID': 1, 'Pathway Name': 'P'}])
+        conflicting = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway Name': 'P', 'Patient Age': 54},
+            {'Patient ID': 1, 'Pathway Name': 'P', 'Patient Age': 55},
+        ])
+
+        with self.assertRaisesRegex(ValueError, 'conflicting duplicate rows'):
+            tc.merge_demographics(base, conflicting)
+
+    def test_pathway_id_is_preferred_for_enrichment_matching(self):
+        base = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway_ID': 101, 'Pathway Name': 'Same name'},
+            {'Patient ID': 1, 'Pathway_ID': 202, 'Pathway Name': 'Same name'},
+        ])
+        enrichment = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway_ID': 101, 'Pathway_Start_Date': '2025-01-01'},
+            {'Patient ID': 1, 'Pathway_ID': 202, 'Pathway_Start_Date': '2026-01-01'},
+        ])
+
+        result = tc.merge_demographics(base, enrichment)
+
+        self.assertEqual(
+            result['Pathway_Start_Date'].tolist(),
+            ['2025-01-01', '2026-01-01'],
+        )
+
+    def test_pathway_id_from_schedule_is_used_for_pathway_enrichment(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Pathway_ID': 101, 'Content Name': 'C1', 'Scheduled date': '2025-01-01', 'Input date': '2025-01-01'},
+            ]).to_csv(content_path, index=False)
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'C1', 'Entry Date': '2025-01-01', 'Question': 'Q1', 'Answer Text': '', 'Answer Value': 'A'},
+            ]).to_csv(answers_path, index=False)
+            enrichment = pd.DataFrame([
+                {'Patient ID': 1, 'Pathway_ID': 101, 'Pathway_Start_Date': '2025-01-01'},
+            ])
+
+            result = tn.process_normal_files(content_path, answers_path, demographics_file=enrichment)
+
+            self.assertEqual(result.loc[0, 'Pathway_ID'], 101)
+            self.assertEqual(result.loc[0, 'Pathway_Start_Date'], '2025-01-01')
+
+    def test_pathway_enrichment_can_repeat_identity_columns(self):
+        base = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway_ID': 101, 'Pathway Name': 'P'},
+        ])
+        enrichment = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway_ID': 101, 'Pathway Name': 'P', 'Metric': 0.8},
+        ])
+
+        result = tc.merge_demographics(base, enrichment)
+
+        self.assertEqual(result.loc[0, 'Metric'], 0.8)
+        self.assertEqual(list(result.columns).count('Pathway Name'), 1)
+
+    def test_enrichment_merge_allows_repeated_rows_in_transformed_output(self):
+        base = pd.DataFrame([
+            {'Patient ID': 65548, 'Pathway_ID': pd.NA, 'Pathway Name': 'P', 'Event': 1},
+            {'Patient ID': 65548, 'Pathway_ID': pd.NA, 'Pathway Name': 'P', 'Event': 2},
+        ])
+        enrichment = pd.DataFrame([
+            {'Patient ID': 65548, 'Pathway_ID': pd.NA, 'Metric': 0.9},
+        ])
+
+        result = tc.merge_demographics(base, enrichment)
+
+        self.assertEqual(result['Metric'].tolist(), [0.9, 0.9])
+
+    def test_ambiguous_pathway_ids_are_not_assigned_automatically(self):
+        base = pd.DataFrame([{'Patient ID': 1, 'Pathway Name': 'P'}])
+        enrichment = pd.DataFrame([
+            {'Patient ID': 1, 'Pathway_ID': 101, 'Metric': 'A'},
+            {'Patient ID': 1, 'Pathway_ID': 202, 'Metric': 'B'},
+        ])
+
+        with self.assertRaisesRegex(ValueError, 'conflicting duplicate rows'):
+            tc.merge_demographics(base, enrichment)
+
     def test_repeated_multi_question_submissions_share_occurrence_across_questions(self):
         """A submission event (same Entry Date) must assign the SAME occurrence
         number to every question it contains, even if some questions are only
@@ -229,6 +491,39 @@ class TransformationIterativeTest(unittest.TestCase):
             self.assertIn('Allgemeine Gesundheit_1_Q1', result.columns)
             self.assertEqual(result.loc[0, 'Allgemeine Gesundheit_1_Q1'], 'A')
 
+    def test_timestamp_fields_are_normalized_to_calendar_dates(self):
+        values = pd.Series([
+            '2026-09-24 14:35:21',
+            '2026-09-24T23:59:59Z',
+            '2026-09-24T23:59:59-05:00',
+        ])
+
+        normalized = tc.normalize_datetime_series(values)
+
+        self.assertEqual(normalized.tolist(), [
+            pd.Timestamp('2026-09-24'),
+            pd.Timestamp('2026-09-24'),
+            pd.Timestamp('2026-09-24'),
+        ])
+
+    def test_same_calendar_day_timestamps_share_one_iterative_occurrence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_path = os.path.join(tmpdir, 'content.csv')
+            answers_path = os.path.join(tmpdir, 'answers.csv')
+
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Scheduled date': '2026-09-24 00:00:00', 'Input date': '2026-09-24T08:15:00Z'},
+            ]).to_csv(content_path, index=False)
+            pd.DataFrame([
+                {'Patient ID': 1, 'Pathway Name': 'P', 'Content Name': 'BMI', 'Entry Date': '2026-09-24 23:59:59', 'Question': 'BMI', 'Answer Text': '', 'Answer Value': '28.6'},
+            ]).to_csv(answers_path, index=False)
+
+            result = ti.process_iterative_files(content_path, answers_path)
+
+            self.assertIn('BMI_1_BMI', result.columns)
+            self.assertEqual(result.loc[0, 'BMI_1_Entry Date'], pd.Timestamp('2026-09-24'))
+            self.assertEqual(result.loc[0, 'BMI_1_Scheduled date'], pd.Timestamp('2026-09-24'))
+
     def test_weekly_movement_diary_is_iterative(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             content_path = os.path.join(tmpdir, 'content.csv')
@@ -306,26 +601,26 @@ class TransformationIterativeTest(unittest.TestCase):
 
             result = ti.process_iterative_files(content_path, answers_path)
 
-            self.assertIn('Daily Diary_1_Date', result.columns)
-            self.assertIn('Daily Diary_2_Date', result.columns)
-            self.assertIn('Daily Diary_3_Date', result.columns)
-            self.assertIn('Daily Diary_1_Entry_Date', result.columns)
-            self.assertIn('Daily Diary_2_Entry_Date', result.columns)
-            self.assertIn('Daily Diary_3_Entry_Date', result.columns)
-            self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_1_Date']), pd.Timestamp('2025-01-01'))
-            self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_2_Date']), pd.Timestamp('2025-01-07'))
+            self.assertIn('Daily Diary_1_Scheduled date', result.columns)
+            self.assertIn('Daily Diary_2_Scheduled date', result.columns)
+            self.assertIn('Daily Diary_3_Scheduled date', result.columns)
+            self.assertIn('Daily Diary_1_Entry Date', result.columns)
+            self.assertIn('Daily Diary_2_Entry Date', result.columns)
+            self.assertIn('Daily Diary_3_Entry Date', result.columns)
+            self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_1_Scheduled date']), pd.Timestamp('2025-01-01'))
+            self.assertEqual(pd.Timestamp(result.loc[0, 'Daily Diary_2_Scheduled date']), pd.Timestamp('2025-01-07'))
             # Occurrence 3 (2025-01-03) has no matching schedule row, so its date is blank
-            self.assertTrue(pd.isna(result.loc[0, 'Daily Diary_3_Date']))
+            self.assertTrue(pd.isna(result.loc[0, 'Daily Diary_3_Scheduled date']))
             self.assertEqual(
-                pd.Timestamp(result.loc[0, 'Daily Diary_1_Entry_Date']),
+                pd.Timestamp(result.loc[0, 'Daily Diary_1_Entry Date']),
                 pd.Timestamp('2025-01-01'),
             )
             self.assertEqual(
-                pd.Timestamp(result.loc[0, 'Daily Diary_2_Entry_Date']),
+                pd.Timestamp(result.loc[0, 'Daily Diary_2_Entry Date']),
                 pd.Timestamp('2025-01-02'),
             )
             self.assertEqual(
-                pd.Timestamp(result.loc[0, 'Daily Diary_3_Entry_Date']),
+                pd.Timestamp(result.loc[0, 'Daily Diary_3_Entry Date']),
                 pd.Timestamp('2025-01-03'),
             )
 

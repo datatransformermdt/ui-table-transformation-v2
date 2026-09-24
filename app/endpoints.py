@@ -8,6 +8,7 @@ Helps identify which endpoints are available in the data and which can be derive
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
+from transformation_common import normalize_datetime_series
 
 
 class EndpointStatus(Enum):
@@ -342,8 +343,8 @@ class EndpointDeriver:
         if admission_col not in df.columns or discharge_col not in df.columns:
             return pd.Series([None] * len(df), index=df.index)
         
-        admission = pd.to_datetime(df[admission_col], errors="coerce")
-        discharge = pd.to_datetime(df[discharge_col], errors="coerce")
+        admission = normalize_datetime_series(df[admission_col])
+        discharge = normalize_datetime_series(df[discharge_col])
         
         los = (discharge - admission).dt.days
         

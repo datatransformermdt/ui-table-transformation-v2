@@ -118,6 +118,23 @@ def _find_excel_header_row(df):
 
 
 def read_input_file(file):
+    if isinstance(file, pd.DataFrame):
+        return file.copy()
+
+    if isinstance(file, (list, tuple)):
+        if not file:
+            raise ValueError("No files provided for concatenation.")
+
+        frames = []
+        for item in file:
+            frames.append(read_input_file(item))
+
+        if not frames:
+            raise ValueError("No readable dataframes found in the provided file list.")
+
+        combined = pd.concat(frames, ignore_index=True)
+        return combined
+
     file_name = file if isinstance(file, str) else getattr(file, "name", "")
     suffix = Path(file_name).suffix.lower()
 
@@ -145,7 +162,58 @@ def read_input_file(file):
 
 
 def clean_columns(df):
-    df.columns = [str(col).strip() for col in df.columns]
+    # Normalize common spreadsheet/header variations so equivalent columns from
+    # different exports still match the same internal schema.
+    canonical_aliases = {
+        "patient id": "Patient ID",
+        "patientid": "Patient ID",
+        "patient_id": "Patient ID",
+        "pathway name": "Pathway Name",
+        "pathwayname": "Pathway Name",
+        "pathway_name": "Pathway Name",
+        "pathway id": "Pathway_ID",
+        "pathwayid": "Pathway_ID",
+        "pathway_id": "Pathway_ID",
+        "content name": "Content Name",
+        "contentname": "Content Name",
+        "content_name": "Content Name",
+        "entry date": "Entry Date",
+        "entrydate": "Entry Date",
+        "entry_date": "Entry Date",
+        "scheduled date": "Scheduled date",
+        "scheduleddate": "Scheduled date",
+        "scheduled_date": "Scheduled date",
+        "input date": "Input date",
+        "inputdate": "Input date",
+        "input_date": "Input date",
+        "question": "Question",
+        "answer text": "Answer Text",
+        "answertext": "Answer Text",
+        "answer_text": "Answer Text",
+        "text answer": "Text Answer",
+        "textanswer": "Text Answer",
+        "text_answer": "Text Answer",
+        "answer value": "Answer Value",
+        "answervalue": "Answer Value",
+        "answer_value": "Answer Value",
+        "numeric answer": "Numeric Answer",
+        "numericanswer": "Numeric Answer",
+        "numeric_answer": "Numeric Answer",
+        "value": "Value",
+        "answer": "Answer",
+    }
+
+    normalized_columns = []
+    for col in df.columns:
+        original = str(col).strip()
+        key = unicodedata.normalize("NFKC", original)
+        key = re.sub(r"[_\s]+", " ", key).strip().lower()
+        normalized = canonical_aliases.get(key, original)
+        normalized_columns.append(normalized)
+
+    df = df.copy()
+    df.columns = normalized_columns
+
     # Strip whitespace from join-key columns so that "PathwayA " and "PathwayA"
     # are treated as the same key across every file.  pandas .str.strip()
     # preserves NaN values, so missing data is unaffected.
@@ -157,8 +225,30 @@ def clean_columns(df):
 
 def normalize_datetime_column(df, col_name):
     if col_name in df.columns:
-        df[col_name] = pd.to_datetime(df[col_name], errors="coerce")
+        df[col_name] = normalize_datetime_series(df[col_name])
     return df
+
+
+def normalize_datetime_series(series):
+    """Convert timestamp values to timezone-independent calendar dates.
+
+    Date-based business logic must treat values from the same calendar day as
+    equal, regardless of time, fractional seconds, or timestamp formatting.
+    Each value is parsed independently so mixed timezone formats are handled
+    without converting a local timestamp across a UTC date boundary.
+    """
+    def to_calendar_date(value):
+        if pd.isna(value):
+            return pd.NaT
+        try:
+            timestamp = pd.Timestamp(value)
+            # Preserve the date represented by the source timestamp, then
+            # remove the time and timezone before any joins or calculations.
+            return pd.Timestamp(timestamp.date())
+        except (TypeError, ValueError, OverflowError):
+            return pd.NaT
+
+    return pd.to_datetime(series.map(to_calendar_date), errors="coerce")
 
 
 def _strip_accents(text):
@@ -274,6 +364,30 @@ def build_content_base(content_file):
     return content[["Patient ID", "Pathway Name"]].drop_duplicates()
 
 
+def attach_pathway_ids(df, content_file):
+    """Carry an unambiguous Pathway_ID from the content source into output."""
+    if "Pathway_ID" in df.columns:
+        return df
+
+    content = clean_columns(read_input_file(content_file))
+    required = ["Patient ID", "Pathway Name", "Pathway_ID"]
+    if any(col not in content.columns for col in required):
+        return df
+
+    keys = ["Patient ID", "Pathway Name"]
+    pathway_ids = content[keys + ["Pathway_ID"]].dropna(subset=["Pathway_ID"])
+    unique_ids = (
+        pathway_ids.groupby(keys, as_index=False)["Pathway_ID"]
+        .nunique()
+        .rename(columns={"Pathway_ID": "_Pathway_ID_count"})
+    )
+    pathway_ids = pathway_ids.merge(unique_ids, on=keys, how="left")
+    pathway_ids = pathway_ids[pathway_ids["_Pathway_ID_count"] == 1]
+    pathway_ids = pathway_ids.drop(columns="_Pathway_ID_count").drop_duplicates(keys)
+
+    return df.merge(pathway_ids, on=keys, how="left", validate="one_to_one")
+
+
 def build_patient_base(content_file, demographics_file=None, answers_file=None):
     """
     Build the full (Patient ID, Pathway Name) universe for the output.
@@ -301,19 +415,16 @@ def build_patient_base(content_file, demographics_file=None, answers_file=None):
     else:
         answers_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
 
-    # Pairs from demographics file
-    if demographics_file is None:
-        demo_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
-    else:
-        if isinstance(demographics_file, pd.DataFrame):
-            demo = clean_columns(demographics_file.copy())
-        else:
-            demo = read_demographics_file(demographics_file)
-        require_columns(demo, ["Patient ID"], "Enrichment file")
+    # Pairs from every enrichment file. Enrichment inputs may have different
+    # columns, so they are inspected independently rather than concatenated.
+    demo_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
+    for index, demo in enumerate(_as_enrichment_frames(demographics_file), start=1):
+        require_columns(demo, ["Patient ID"], f"Enrichment file {index}")
         if "Pathway Name" in demo.columns:
-            demo_pairs = demo[["Patient ID", "Pathway Name"]].drop_duplicates()
-        else:
-            demo_pairs = pd.DataFrame(columns=["Patient ID", "Pathway Name"])
+            demo_pairs = pd.concat(
+                [demo_pairs, demo[["Patient ID", "Pathway Name"]]],
+                ignore_index=True,
+            )
 
     full_base = (
         pd.concat([content_base, answers_pairs, demo_pairs], ignore_index=True)
@@ -619,10 +730,9 @@ def derive_app(pathway_name):
 def _apply_pathway_derived_columns(final):
     """Add Path and App columns derived from Pathway Name.
 
-    Prints a validation summary including any unknown pathway names
-    (those that could not be classified into a Path value).
-    Called by reorder_transformed_columns so both workflows pick it up
-    without any changes to the workflow files.
+    These columns are only kept when they are fully populated and the App value
+    indicates an analog pathway (i.e. some pathway names contain the word
+    'analog'). Otherwise they are dropped to avoid noisy, incomplete columns.
     """
     if "Pathway Name" not in final.columns:
         return final
@@ -644,6 +754,13 @@ def _apply_pathway_derived_columns(final):
     else:
         print("  All pathway names classified successfully.")
 
+    has_complete_path = final["Path"].notna().all()
+    has_complete_app = final["App"].notna().all()
+    has_analog_pathway = final["App"].astype(str).str.contains("No", case=False, na=False).any()
+
+    if not (has_complete_path and has_complete_app and has_analog_pathway):
+        final = final.drop(columns=["Path", "App"], errors="ignore")
+
     return final
 
 
@@ -653,17 +770,26 @@ def _sort_question_column(col_with_index):
     if not isinstance(col, str):
         return ("", 0, "", index)
 
-    # ContentName_N_Question  (iterative)
+    # For iterative columns, keep each occurrence together as:
+    # Scheduled date -> Entry Date -> question 1 -> question 2 -> ...
     m = re.match(r"^(.+?)_(\d+)_(.+)$", col)
     if m:
-        return (m.group(1).strip().lower(), int(m.group(2)), m.group(3).strip().lower(), index)
+        base, iteration, remainder = m.groups()
+        remainder_lower = remainder.strip().lower()
+        if remainder_lower == "scheduled date":
+            rank = 0
+        elif remainder_lower == "entry date":
+            rank = 1
+        else:
+            rank = 2
+        return (base.strip().lower(), int(iteration), rank, remainder_lower, index)
 
     # ContentName_Question  (non-iterative with content prefix)
     parts = col.split("_", 1)
     if len(parts) == 2:
-        return (parts[0].strip().lower(), 0, parts[1].strip().lower(), index)
+        return (parts[0].strip().lower(), 0, 2, parts[1].strip().lower(), index)
 
-    return ("", 0, col.strip().lower(), index)
+    return ("", 0, 2, col.strip().lower(), index)
 
 
 def _sort_question_columns(cols):
@@ -678,18 +804,20 @@ def reorder_transformed_columns(final, demographics_file=None):
     # This is the single call-site so both workflows pick it up automatically.
     final = _apply_pathway_derived_columns(final)
 
-    primary_id_cols  = [col for col in ["Patient ID"] if col in final.columns]
+    primary_id_cols  = [col for col in ["Patient ID", "Pathway_ID"] if col in final.columns]
     pathway_cols     = [col for col in ["Pathway Name"] if col in final.columns]
     derived_cols     = [col for col in ["Path", "App"] if col in final.columns]
 
     demo_cols = []
     if demographics_file is not None:
-        if isinstance(demographics_file, pd.DataFrame):
-            demo = clean_columns(demographics_file.copy())
-        else:
-            demo = read_demographics_file(demographics_file)
-        demo_cols = [col for col in demo.columns if col not in primary_id_cols + ["Pathway Name"]]
-        demo_cols = [col for col in demo_cols if col in final.columns]
+        demo_cols = []
+        for demo in _as_enrichment_frames(demographics_file):
+            demo_cols.extend(
+                col for col in demo.columns
+                if col not in primary_id_cols + ["Pathway Name"]
+                and col in final.columns
+                and col not in demo_cols
+            )
 
     endpoint_cols = sorted(
         [col for col in final.columns if isinstance(col, str) and col.startswith("Endpoint_")]
@@ -711,7 +839,7 @@ def reorder_transformed_columns(final, demographics_file=None):
         + endpoint_cols                          # Endpoint_* columns
         + content_cols                           # Content Name  (normal workflow only)
         + date_cols                              # Scheduled date, Entry Date  (normal workflow only)
-        + _sort_question_columns(question_cols)  # questionnaire columns
+        + _sort_question_columns(question_cols)  # iterative date fields + questionnaire columns together
     )
     return final[ordered_cols]
 
@@ -721,6 +849,19 @@ def _first_non_null(series):
         if pd.notna(value):
             return value
     return pd.NA
+
+def _as_enrichment_frames(enrichment_files):
+    """Return one cleaned DataFrame per generic enrichment input."""
+    if enrichment_files is None:
+        return []
+    sources = enrichment_files if isinstance(enrichment_files, (list, tuple)) else [enrichment_files]
+    frames = []
+    for source in sources:
+        if isinstance(source, pd.DataFrame):
+            frames.append(clean_columns(source.copy()))
+        else:
+            frames.append(read_demographics_file(source))
+    return frames
 
 
 def _collapse_duplicate_rows(df, merge_keys, df_name):
@@ -739,44 +880,64 @@ def _collapse_duplicate_rows(df, merge_keys, df_name):
                 conflicts.append((key_values, col, non_null_values.tolist()))
 
     if conflicts:
+        print(f"\nConflicting records in {df_name}:")
+        for key_values, column, values in conflicts:
+            key_values = key_values if isinstance(key_values, tuple) else (key_values,)
+            key_filter = pd.Series(True, index=duplicates.index)
+            for key, value in zip(merge_keys, key_values):
+                key_filter &= duplicates[key].eq(value)
+            print(f"\nKeys: {dict(zip(merge_keys, key_values))}")
+            print(f"Conflicting column: {column}; values: {values}")
+            print(duplicates.loc[key_filter, merge_keys + [column]].to_string(index=False))
+
         raise ValueError(
             f"{df_name} contains conflicting duplicate rows for keys {merge_keys}: "
-            f"{len(conflicts)} conflict(s) found."
+            f"{len(conflicts)} conflict(s) found. See the printed records above."
         )
 
     return df.groupby(merge_keys, as_index=False).agg(_first_non_null)
 
 
 def merge_demographics(df, demographics_file):
-    """Merge demographics/enrichment information into the main dataframe.
+    """Merge generic enrichment lookup tables into the main dataframe.
 
-    Accepts either a path/file-like object or a pre-loaded pandas DataFrame.
-    Merges on Patient ID and Pathway Name when both are available.
+    Each input contributes columns horizontally and must contain one logical
+    row per merge key. Separate files may contain completely different fields.
     """
     if demographics_file is None:
         return df
 
-    if isinstance(demographics_file, pd.DataFrame):
-        demo = clean_columns(demographics_file.copy())
-    else:
-        demo = read_demographics_file(demographics_file)
-
     require_columns(df, ["Patient ID"], "Final output")
-    require_columns(demo, ["Patient ID"], "Enrichment file")
+    result = df
+    for index, demo in enumerate(_as_enrichment_frames(demographics_file), start=1):
+        require_columns(demo, ["Patient ID"], f"Enrichment file {index}")
+        merge_keys = ["Patient ID"]
+        if "Pathway_ID" in demo.columns and "Pathway_ID" in result.columns:
+            merge_keys.append("Pathway_ID")
+        elif "Pathway Name" in demo.columns and "Pathway Name" in result.columns:
+            merge_keys.append("Pathway Name")
 
-    merge_keys = ["Patient ID"]
-    if "Pathway Name" in demo.columns and "Pathway Name" in df.columns:
-        merge_keys.append("Pathway Name")
+        demo = _collapse_duplicate_rows(demo, merge_keys, f"Enrichment file {index}")
+        # Identity columns may be present in every enrichment file. They are
+        # used for matching and should not be re-added as payload columns when
+        # Pathway_ID is the selected key instead of Pathway Name.
+        identity_columns = {"Patient ID", "Pathway Name", "Pathway_ID"}
+        redundant_identity_columns = (
+            identity_columns.intersection(demo.columns) - set(merge_keys)
+        ).intersection(result.columns)
+        demo = demo.drop(columns=sorted(redundant_identity_columns))
+        overlap = set(demo.columns).intersection(set(result.columns)) - identity_columns
+        if overlap:
+            raise ValueError(
+                f"Enrichment file {index} contains column(s) already present in output: "
+                f"{sorted(overlap)}"
+            )
 
-    demo = _collapse_duplicate_rows(demo, merge_keys, "Enrichment data")
-
-    overlap = set(demo.columns).intersection(set(df.columns)) - set(merge_keys)
-    if overlap:
-        raise ValueError(
-            f"Enrichment file contains column(s) already present in output: {sorted(overlap)}"
-        )
-
-    return df.merge(demo, on=merge_keys, how="left")
+        # The transformed output may legitimately contain multiple rows for a
+        # patient/pathway (for example, normal workflow questionnaire events).
+        # The enrichment lookup must be unique; the left side need not be.
+        result = result.merge(demo, on=merge_keys, how="left", validate="many_to_one")
+    return result
 
 
 def _assign_answer_entry_dates_by_tolerance(left, right, tolerance=pd.Timedelta(seconds=2)):

@@ -96,13 +96,13 @@ with tabs[0]:
     st.info("""
     Upload files for your transformation. Supported formats are **CSV** and **Excel (.xlsx)**.
     For each file, specify its role:
-    - **Answers**: Patient responses to questionnaires (REQUIRED)
-    - **Scheduled Content**: Pathway/content information
+    - **Answers**: Patient responses to questionnaires (REQUIRED; multiple files will be concatenated)
+    - **Scheduled Content**: Pathway/content information (multiple files will be concatenated)
     - **Demographics**: Age, sex, other patient attributes
     - **Endpoints**: Clinical endpoints, dates, outcomes
     - **Adherence**: Pathway completion/adherence tracking
     
-    The demographics role can accept multiple files; they will be concatenated and merged together.
+    Multiple files can be assigned to the same role and will be concatenated before transformation.
     """)
     
     # File upload interface
@@ -119,7 +119,7 @@ with tabs[0]:
     with col2:
         if uploaded_files:
             st.success(f"✅ {len(uploaded_files)} file(s) uploaded")
-            st.caption("Tip: you can upload Excel or CSV files here. Assign any metadata/enrichment files to the Demographics role and multiple files will be merged together.")
+            st.caption("Tip: you can upload Excel or CSV files here. Assign any related files to the same role and they will be merged together before processing.")
             
             # Display uploaded file info
             for file in uploaded_files:
@@ -307,20 +307,37 @@ with tabs[4]:
             with st.spinner("Transforming data..."):
                 try:
                     # Get files by role
-                    answers_file = None
-                    scheduled_file = None
+                    answers_files = []
+                    scheduled_files = []
                     demographics_files = []
 
                     for file_name, file_role in st.session_state.file_roles.items():
                         file = st.session_state.uploaded_files[file_name]
                         if file_role == FileRole.ANSWERS:
-                            answers_file = file
+                            answers_files.append(file)
                         elif file_role == FileRole.SCHEDULED_CONTENT:
-                            scheduled_file = file
+                            scheduled_files.append(file)
                         elif file_role == FileRole.DEMOGRAPHICS:
                             demographics_files.append(file)
 
-                    # If multiple demographics/enrichment files were provided, read and concatenate them
+                    answers_file = None
+                    if answers_files:
+                        try:
+                            answers_file = read_input_file(answers_files)
+                            answers_file = clean_columns(answers_file)
+                        except Exception as e:
+                            st.warning(f"Could not read answer files: {e}")
+
+                    scheduled_file = None
+                    if scheduled_files:
+                        try:
+                            scheduled_file = read_input_file(scheduled_files)
+                            scheduled_file = clean_columns(scheduled_file)
+                        except Exception as e:
+                            st.warning(f"Could not read scheduled-content files: {e}")
+
+                    # Keep enrichment files separate: each is a generic lookup
+                    # table and must be merged horizontally on its key columns.
                     demographics_file = None
                     if demographics_files:
                         demo_dfs = []
@@ -333,11 +350,7 @@ with tabs[4]:
                                 st.warning(f"Could not read demographics file {getattr(f, 'name', str(f))}: {e}")
 
                         if demo_dfs:
-                            try:
-                                demographics_file = pd.concat(demo_dfs, ignore_index=True)
-                            except Exception:
-                                # fallback to first file if concat fails for any reason
-                                demographics_file = demo_dfs[0]
+                            demographics_file = demo_dfs
 
                     # Run transformation using appropriate workflow
                     result_df = process_files(

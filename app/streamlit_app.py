@@ -10,6 +10,9 @@ from transformation_common import read_input_file, clean_columns
 
 
 def read_uploaded_file_with_reset(file):
+    if isinstance(file, (list, tuple)):
+        return read_input_file(file)
+
     try:
         return read_input_file(file)
     finally:
@@ -219,7 +222,8 @@ st.markdown(
 
 # ── Session state ──────────────────────────────────────────────────────────────
 primary_done      = st.session_state.get("primary_file") is not None
-secondary_done    = st.session_state.get("secondary_file") is not None
+secondary_val     = st.session_state.get("secondary_file")
+secondary_done    = secondary_val is not None and (len(secondary_val) if isinstance(secondary_val, list) else True)
 demographics_val  = st.session_state.get("demographics_file")
 if isinstance(demographics_val, list):
     demographics_done = len(demographics_val) > 0
@@ -302,11 +306,16 @@ with col1:
 with col2:
     card_cls = "upload-card done" if secondary_done else "upload-card"
     if secondary_done:
-        fname = st.session_state["secondary_file"].name
+        secondary_items = st.session_state.get("secondary_file")
+        if isinstance(secondary_items, list):
+            names = ", ".join(getattr(f, "name", str(f)) for f in secondary_items)
+            status_text = f"{len(secondary_items)} files — uploaded: {names}"
+        else:
+            status_text = f"{getattr(secondary_items, 'name', str(secondary_items))} — uploaded"
         status_block = (
             '<div class="upload-status">'
             '<div class="upload-status-dot"></div>'
-            '<div class="upload-status-text">' + fname + ' — uploaded</div>'
+            '<div class="upload-status-text">' + status_text + '</div>'
             '</div>'
         )
     else:
@@ -315,11 +324,11 @@ with col2:
         '<div class="' + card_cls + '">'
         '<div class="upload-card-file-label">File 2 of 3</div>'
         '<div class="upload-card-title">Patient answers</div>'
-        '<div class="upload-card-desc">The file that contains how each patient responded to each question.</div>'
+        '<div class="upload-card-desc">The file(s) that contain how each patient responded to each question. You can upload multiple answer files, for example one per questionnaire.</div>'
         '<div class="upload-card-example">'
         '<div class="workflow-example-label">Source columns</div>'
         '<table class="mini-table"><tr><th>Patient ID</th><th>Pathway Name</th><th>Content Name</th><th>Entry Date</th><th>Question</th><th>Answer Text</th><th>Answer Value</th></tr></table>'
-        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Example file name: <span>data.csv</span></div>'
+        '<div style="margin-top:8px;font-size:11px;color:#64748B;">Example files: <span>questionnaire_1.csv</span>, <span>questionnaire_2.csv</span></div>'
         '</div>'
         + status_block + '</div>',
         unsafe_allow_html=True,
@@ -327,9 +336,11 @@ with col2:
     st.file_uploader(
         "Patient answers file",
         type=["csv", "xlsx"],
+        accept_multiple_files=True,
         key="secondary_file",
         label_visibility="collapsed",
     )
+    st.caption("You can select more than one answers file; all answer files are merged before transformation.")
 
 with col3:
     card_cls = "upload-card done" if demographics_done else "upload-card"
@@ -502,9 +513,16 @@ if required_done:
                 if demo_dfs:
                     demographics_arg = pd.concat(demo_dfs, ignore_index=True)
 
+                secondary_val = st.session_state.get("secondary_file")
+                answer_files = secondary_val if isinstance(secondary_val, list) else ([secondary_val] if secondary_val is not None else [])
+                answer_df = None
+                if answer_files:
+                    answer_df = read_uploaded_file_with_reset(answer_files)
+                    answer_df = clean_columns(answer_df)
+
                 result_df = process_files(
                     st.session_state["primary_file"],
-                    st.session_state["secondary_file"],
+                    answer_df,
                     workflow=workflow,
                     demographics_file=demographics_arg,
                     endpoint_file=endpoint_df_arg,

@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from transformation_common import (
     apply_question_canonical_map,
+    attach_pathway_ids,
     build_answer_table,
     build_patient_base,
     _compute_source_stats,
@@ -138,13 +139,13 @@ def _build_question_iteration_column(row, has_content_name):
     return question
 
 
-def _build_date_iteration_column(row, has_content_name):
+def _build_date_iteration_column(row, has_content_name, label="Scheduled date"):
     content_name = str(row["Content_Name_Normalized"]).strip() if has_content_name else ""
     iteration = str(int(row["Occurrence"]))
 
     if has_content_name:
-        return f"{content_name}_{iteration}_Date"
-    return f"{iteration}_Date"
+        return f"{content_name}_{iteration}_{label}"
+    return f"{iteration}_{label}"
 
 
 def _attach_scheduled_dates(events, schedule_file, tolerance=pd.Timedelta(seconds=2)):
@@ -189,7 +190,13 @@ def _attach_scheduled_dates(events, schedule_file, tolerance=pd.Timedelta(second
     events["_event_idx"] = events.index
     candidates = events.merge(schedule_slots, on=core_keys, how="left")
     candidates["_distance"] = (candidates["Entry Date"] - candidates["Input date"]).abs()
-    candidates = candidates[candidates["_distance"] <= tolerance]
+    same_calendar_day = (
+        candidates["Entry Date"].dt.normalize()
+        == candidates["Input date"].dt.normalize()
+    )
+    candidates = candidates[
+        (candidates["_distance"] <= tolerance) | same_calendar_day
+    ]
 
     if candidates.empty:
         return events.drop(columns=["_event_idx"])
@@ -204,6 +211,57 @@ def _attach_scheduled_dates(events, schedule_file, tolerance=pd.Timedelta(second
     events["Scheduled date"] = events["_Scheduled_date_candidate"].fillna(events["Scheduled date"])
     events = events.drop(columns=["_event_idx", "_Scheduled_date_candidate"])
     return events
+
+
+def _add_missing_schedule_events(events, schedule_file):
+    """Add submitted schedule rows that have no answer rows yet.
+
+    A schedule row with an Input date represents a questionnaire submission,
+    even when the answers export did not contain any question rows for it.
+    Keeping that event preserves its Entry Date and Scheduled date in output.
+    """
+    try:
+        schedule = clean_columns(read_input_file(schedule_file))
+    except Exception:
+        return events
+
+    required = ["Patient ID", "Pathway Name", "Content Name", "Scheduled date", "Input date"]
+    if any(col not in schedule.columns for col in required):
+        return events
+
+    schedule = schedule.copy()
+    schedule["Content_Name_Normalized"] = schedule["Content Name"].apply(normalize_content_name)
+    normalize_datetime_column(schedule, "Input date")
+    normalize_datetime_column(schedule, "Scheduled date")
+    selected_content_names = set(events["Content_Name_Normalized"].dropna())
+    schedule = schedule[schedule["Content_Name_Normalized"].isin(selected_content_names)]
+    if schedule.empty:
+        return events
+    schedule_events = schedule[
+        ["Patient ID", "Pathway Name", "Content_Name_Normalized", "Input date"]
+    ].dropna(subset=["Input date"]).drop_duplicates()
+
+    if schedule_events.empty:
+        return events
+
+    event_keys = ["Patient ID", "Pathway Name", "Content_Name_Normalized"]
+    existing = events[event_keys + ["Entry Date"]].copy()
+    existing["_entry_day"] = existing["Entry Date"].dt.normalize()
+    schedule_events["_entry_day"] = schedule_events["Input date"].dt.normalize()
+    schedule_events = schedule_events.merge(
+        existing[event_keys + ["_entry_day"]].drop_duplicates(),
+        on=event_keys + ["_entry_day"],
+        how="left",
+        indicator=True,
+    )
+    schedule_events = schedule_events[schedule_events["_merge"] == "left_only"]
+    if schedule_events.empty:
+        return events
+
+    missing_events = schedule_events[event_keys + ["Input date"]].rename(
+        columns={"Input date": "Entry Date"}
+    )
+    return pd.concat([events, missing_events], ignore_index=True)
 
 
 def _build_questionnaire_occurrence_validation(answers, final):
@@ -349,9 +407,11 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     # Track rows where Question is blank but an answer value exists
     report_mask = blank_q_mask & answers["Answer_Combined"].notna()
-    blank_question_report = answers.loc[report_mask, [
-        "Patient ID", "Pathway Name", "Content Name", "Entry Date", "Answer Text", "Answer Value"
-    ]].copy()
+    report_cols = ["Patient ID", "Pathway Name", "Content Name", "Entry Date"]
+    for candidate in ["Answer Text", "Text Answer", "Answer", "Answer Value", "Value", "Numeric Answer"]:
+        if candidate in answers.columns:
+            report_cols.append(candidate)
+    blank_question_report = answers.loc[report_mask, report_cols].copy()
 
     answers = answers[~blank_q_mask].copy()
 
@@ -361,6 +421,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
 
     if answers.empty:
         final = base.copy()
+        final = attach_pathway_ids(final, primary_file)
         final = merge_demographics(final, demographics_file)
         if endpoint_file is not None:
             endpoints = prepare_endpoint_file(endpoint_file)
@@ -408,6 +469,19 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         .cumcount()
         + 1
     )
+    events = _add_missing_schedule_events(events, primary_file)
+    events = events.sort_values(
+        ["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"],
+        na_position="last",
+    ).reset_index(drop=True)
+    events["Occurrence"] = (
+        events.groupby(
+            ["Patient ID", "Pathway Name", "Content_Name_Normalized"],
+            dropna=False, sort=False,
+        )
+        .cumcount()
+        + 1
+    )
     answers = answers.merge(
         events,
         on=["Patient ID", "Pathway Name", "Content_Name_Normalized", "Entry Date"],
@@ -425,12 +499,18 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
         _diag_answers("4. After Question_Iteration assignment (before pivot)", answers,
                       _answers_only if _DEBUG_ANALOG else None)
 
-    final = answers.pivot_table(
+    answer_values = (
+        answers.groupby(
+            ["Patient ID", "Pathway Name", "Question_Iteration"],
+            dropna=False,
+            as_index=False,
+        )["Answer_Combined"]
+        .first()
+    )
+    final = answer_values.pivot(
         index=["Patient ID", "Pathway Name"],
         columns="Question_Iteration",
         values="Answer_Combined",
-        aggfunc="first",
-        dropna=False,
     ).reset_index()
     final.columns.name = None
 
@@ -439,35 +519,30 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     # Content Name + nearest Input date to the occurrence's own Entry Date).
     dated_events = _attach_scheduled_dates(events, primary_file)
     dated_events["Date_Iteration"] = dated_events.apply(
-        lambda row: _build_date_iteration_column(row, has_content_name),
+        lambda row: _build_date_iteration_column(row, has_content_name, label="Scheduled date"),
         axis=1,
     )
-    date_pivot = dated_events.pivot_table(
+    date_pivot = dated_events.pivot(
         index=["Patient ID", "Pathway Name"],
         columns="Date_Iteration",
         values="Scheduled date",
-        aggfunc="first",
-        dropna=False,
     ).reset_index()
     date_pivot.columns.name = None
-    final = final.merge(date_pivot, on=["Patient ID", "Pathway Name"], how="left")
+    final = final.merge(date_pivot, on=["Patient ID", "Pathway Name"], how="outer")
 
     entry_date_events = events.copy()
     entry_date_events["Date_Iteration"] = entry_date_events.apply(
-        lambda row: _build_date_iteration_column(row, has_content_name)
-        .replace("_Date", "_Entry_Date"),
+        lambda row: _build_date_iteration_column(row, has_content_name, label="Entry Date"),
         axis=1,
     )
-    entry_date_pivot = entry_date_events.pivot_table(
+    entry_date_pivot = entry_date_events.pivot(
         index=["Patient ID", "Pathway Name"],
         columns="Date_Iteration",
         values="Entry Date",
-        aggfunc="first",
-        dropna=False,
     ).reset_index()
     entry_date_pivot.columns.name = None
     final = final.merge(
-        entry_date_pivot, on=["Patient ID", "Pathway Name"], how="left"
+        entry_date_pivot, on=["Patient ID", "Pathway Name"], how="outer"
     )
 
     if _DEBUG_ANALOG:
@@ -494,6 +569,7 @@ def process_iterative_files(primary_file, secondary_file, demographics_file=None
     # Collect pairs for the report
     _ans_pairs = answers[["Patient ID", "Pathway Name"]].drop_duplicates()
 
+    final = attach_pathway_ids(final, primary_file)
     final = merge_demographics(final, demographics_file)
     if endpoint_file is not None:
         endpoints = prepare_endpoint_file(endpoint_file)

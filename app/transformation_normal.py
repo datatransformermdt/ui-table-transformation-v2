@@ -4,6 +4,7 @@ from transformation_common import (
     apply_question_canonical_map,
     build_merged_table,
     build_patient_base,
+    attach_pathway_ids,
     _compute_source_stats,
     build_transformation_report,
     merge_demographics,
@@ -99,6 +100,7 @@ def process_normal_files(primary_file, secondary_file, demographics_file=None, e
     source_stats = _compute_source_stats(final, content_base)
     _ans_pairs = df[["Patient ID", "Pathway Name"]].drop_duplicates()
 
+    final = attach_pathway_ids(final, primary_file)
     final = merge_demographics(final, demographics_file)
 
     if endpoint_file is not None:
